@@ -15,4 +15,6 @@ Forked from [t2ec](https://github.com/nwg-piotr), pmt2e is written with these pu
 
   * use OpenMeteo instead of OpenWeatherMaps
 
+  * use separate name for exery tint2 executor instead of grouping all executors under  a single script calling  them (work in progress).
+
 Many scripts show no changes related to the t2ec ones, excluding font glyphs, others are more  deeply modified and/or rewritten. Many other code snippets taken from other projects are used and credits are reported in every script description.

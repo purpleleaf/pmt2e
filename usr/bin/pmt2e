@@ -1,0 +1,35 @@
+#!/bin/sh
+
+if [[ $1 == --weather ]] || [[ $1 == --bbswitch ]] || [[ $1 == --volume ]] || [[ $1 == --brightness ]] || [[ $1 == --lbrightness ]] || [[ $1 == --battery ]] || [[ $1 == --wifi ]]; then
+    if [[ $2 == menu ]]; then
+        exec /usr/lib/pmt2e/menus.sh $1
+    fi
+fi
+
+if [[ $1 == --desktop ]]; then
+    exec /usr/lib/pmt2e/desktop.py $2
+elif [[ $1 == --bbswitch ]]; then
+    exec /usr/lib/pmt2e/bbswitch-status-temp.sh $2
+elif [[ $1 == --paswitch ]]; then
+    exec /usr/lib/pmt2e/pa-jgmenu.py
+elif [[ $1 == --volume ]]; then
+    exec /usr/lib/pmt2e/volume-icon.sh "${@:2}"
+elif [[ $1 == --brightness ]]; then
+    exec /usr/lib/pmt2e/brightness-icon.sh $2
+elif [[ $1 == --lbrightness ]]; then
+    exec /usr/lib/pmt2e/brightness-icon-light.sh $2
+elif [[ $1 == --battery ]]; then
+    exec /usr/lib/pmt2e/battery-icon.sh "${@:2}"
+elif [[ $1 == --wifi ]]; then
+    exec /usr/lib/pmt2e/wifi-name.sh "$2"
+elif [[ $1 == --update ]]; then
+    exec /usr/lib/pmt2e/arch-update.py "${@:2}"
+elif [[ $1 == --weather ]]; then
+    exec /usr/lib/pmt2e/weather.py "${@:2}"
+elif [[ $1 == --yad ]]; then
+        exec /usr/lib/pmt2e/yad-box.sh $2
+elif [[ $1 == "-h" ]] || [[ $1 == "--help" ]]; then
+    exec /usr/lib/pmt2e/help.sh
+else
+    echo "Try 'pmt2e -h' for help"
+fi
