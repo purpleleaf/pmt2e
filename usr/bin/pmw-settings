@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+
+# Author: purpleleaf <max at ganoia dot eu>
+# Thanks to nilsonmorale for Yay settings scripts 
+# https://github.com/Dimorld/ywtray
+# Thanks to  John D. Martin III  for the original open weather parser
+# https://github.com/jdmar3/galo.sh
+# Icons by:
+# Amchart - https://www.amcharts.com
+# JoshuaKimsey - https://github.com/JoshuaKimsey/amCharts-SVG-Icons-Additions
+
+# Dependencies: curl, yad, awk
+
+# VARIABLES 
+location=''                   # Town, Country OR State      needed by https://geocode.maps.co
+icon_type=''                  # icon type setting.
+declare -a location_and_units # array to store location and weather preferred units
+declare -a request_lat_lon    # array to store the latitude and longitude pair for the location
+latitude=''                   #                             needed by https://api.open-meteo.com/v1/forecast
+longitude=''                  #                             needed by https://api.open-meteo.com/v1/forecast
+temp_unit=''                  #                             needed by https://api.open-meteo.com/v1/forecast
+windspeed_unit=''             # kmh, ms, mph, kn            needed by https://api.open-meteo.com/v1/forecast
+precipitation_unit=''		  #                             needed by https://api.open-meteo.com/v1/forecast
+icons_dir="/usr/share/pmt2e/wheather_icons/dark"    # weather icons location
+conf_file=".config/pmt2e/pmw.conf"
+# set yad combo boxes selection text
+yad_temp='1. celsius!2. fahrenheit'
+yad_wind='1. km/h!2. m/s!3. mph!4. knots'
+yad_precipitation='1. mm!2. inch'
+yad_icon_type='1. Coloured Icons!2. Monochrome Icons!3. Font Glyphs'
+
+# function to show yad dialog error 
+show_errors () {
+  local text="$1"
+  yad --splash --image="gtk-dialog-warning" --on-top \
+  --button="yad-ok:0" --center \
+  --text="${text}"
+  exit 1
+}
+
+#check if a conf file exist
+if [[ -f ~/.config/pmt2e/pmw.conf ]]; then
+    source ~/.config/pmt2e/pmw.conf
+	conf_exist=true
+
+	# use positioning selection to set default units
+	# $1=yad_[temp|wind|precipitation|_icon_type]
+	# $2=[temp|wind|precipitation|icon]_match
+	# ref https://unix.stackexchange.com/questions/369818/how-to-insert-a-string-into-a-text-variable-at-specified-position
+	select_default_unit () { 
+	local text="$1"
+	local match="$2"
+	if [[ -n $match ]]; then
+		text="${text%%${match}*}^${match}${text##*${match}}"
+	fi
+	echo ${text}
+	}
+
+	# match default unit
+	if [[ $temp_unit == "celsius" ]]; then
+	    temp_match="1"
+	elif [[ $temp_unit == "fahrenheit" ]]; then
+	    temp_match="2"
+	fi
+
+	if [[ $windspeed_unit == "kmh" ]]; then
+	    wind_match="1"
+	elif [[ $windspeed_unit == "ms" ]]; then
+ 	   wind_match="2"
+	elif [[ $windspeed_unit == "mph" ]]; then
+	    wind_match="3"
+	elif [[ $windspeed_unit == "kn" ]]; then
+	    wind_match="4"
+	fi
+
+	if [[ $precipitation_unit == "mm" ]]; then
+ 	   precipitation_match="1"
+	elif [[ $precipitation_unit == "inch" ]]; then
+ 	   precipitation_match="2"
+	fi
+
+	if [[ $icon_type == "coloured" ]]; then
+	    icon_match="1"
+	elif [[ $icon_type == "monochrome" ]]; then
+	    icon_match="2"
+	elif [[ $icon_type == "glyphs" ]]; then 
+ 	   icon_match="3"
+	fi
+else
+	if [[ ! -d $HOME/.config/pmt2e ]]; then
+		mkdir -p $HOME/.config/pmt2e
+	fi
+fi
+
+#use an array to dinamically pass arguments to yad
+location_and_units_args=(
+--title="Poorman weather - Settings"
+--image="${icons_dir}/equator.svg"
+--center
+--text="Select a place, your measuring units and your desidered icont type.\nRetrieving the latitude and longitude coordinates may take a few seconds"
+--width=460
+--height=220
+--window-icon="${icons_dir}"/cloudy-1-day.svg
+--form
+--button=Cancel\!cancel:1 --button=OK\!ok:0 
+--field="Location:" 
+--field="Temperature Unit:CB" 
+--field="Wind Speed Unit:CB"
+--field="Precipitation Unit:CB"
+--field="Icon type:CB"
+)
+
+if [[ ${conf_exist} == "true" ]]; then
+location_and_units_args+=("${location}" "$(select_default_unit "$yad_temp" "$temp_match")" "$(select_default_unit "$yad_wind" "$wind_match")" "$(select_default_unit "$yad_precipitation" "$precipitation_match")" "$(select_default_unit "$yad_icon_type" "$icon_match")")
+else
+location_and_units_args+=( "" "${yad_temp}" "${yad_wind}"  "${yad_precipitation}"  "${yad_icon_type}" )
+fi
+
+oldifs="${IFS}"
+IFS=$'|'
+
+location_and_units=($( yad "${location_and_units_args[@]}"
+))
+
+[[ -n "${location_and_units[0]}" ]] ||  { show_errors "No location provided, try again"
+exit 1
+}
+
+function lat_lon_parser (){
+    awk '
+        BEGIN{
+            RS="[]\"],\""
+            ORS="\n"
+            FS="\":\""
+            OFS=" "
+        }
+        /lat":/{f=1}
+        f==1{
+            $1=$1
+            printf("%s ", $2)
+        }
+        /display_name/{
+            f=0    
+            print ""
+        }
+    '
+}
+
+IFS="${oldifs}"
+
+geocode_file=$(mktemp -t geocode.XXXXXXXXXX)
+
+geocode_response=$(curl --output ${geocode_file} --write-out %{http_code} --retry 5 --retry-max 10 -s -k -G \
+"https://geocode.maps.co/search?q=${location_and_units[0]}")
+
+geocode_data=$(cat ${geocode_file})
+rm ${geocode_file}
+
+if [ ${geocode_response} -ne "200" ]; then
+	if [[  ${geocode_data} == *"error"* ]]; then
+		# Query malformed, json reports errors
+		show_errors "PM Weather - Query error"
+	else
+		# Other http errors 
+		show_errors "PM Weather - Http Error ${geocode_response}"
+	fi
+	show_errors "PM Weather -  Something went wrong!"
+else
+	#check if json contains necessary data
+	if [[  ${geocode_data} != *"place_id"* ]] ; then   
+		show_errors "PM Weather -  No useful json data"
+	fi
+fi
+
+request_lat_lon=($( echo "${geocode_data[@]}" | \
+    lat_lon_parser - | \
+    yad --list \
+     --title="Poorman weather - location selection" \
+     --image="${icons_dir}/location.svg" \
+     --image-on-top \
+     --center \
+     --width="600" \
+     --height="340" \
+     --text-align="left" \
+     --buttons-layout="end" \
+     --button=""Cancel"!cancel:1" --button="yad-ok:0"  \
+     --escape-ok \
+     --text="Choose the nearest place to your location\nIf no coordinates are found click Cancel and try a different place" \
+     --window-icon="${icons_dir}/cloudy-1-day.svg" \
+     --column="Locations:TEXT"
+))
+
+latitude="${request_lat_lon[0]}"
+
+[[ "${latitude}" =~ [0-9-] ]]  || { show_errors "No coordinates found, try again"
+exit 1
+}
+
+printf -- "latitude=\"%s\"\n" "${latitude}" > $HOME/"${conf_file}"
+
+longitude="${request_lat_lon[1]}"
+printf -- "longitude=\"%s\"\n" "${longitude}" >> $HOME/"${conf_file}"
+
+printf -- "location=\"%s\"\n" "${location_and_units[0]}" >> $HOME/"${conf_file}"
+
+if [[ "$(printf -- "%s" "${location_and_units[1]}" | cut -d. -f 1)" = "1" ]] ; then
+    temp_unit="celsius"
+elif [[ "$(printf -- "%s" "${location_and_units[1]}" | cut -d. -f 1)" = "2" ]]; then
+    temp_unit="fahrenheit"
+fi
+printf -- "temp_unit=\"%s\"\n" "${temp_unit}" >> $HOME/"${conf_file}"
+
+case "$(printf -- "%s" "${location_and_units[2]}" | cut -d. -f 1)" in 
+    1)
+        windspeed_unit="kmh"
+        ;;
+    2)
+        windspeed_unit="ms"
+        ;;
+    3)
+        windspeed_unit="mph"
+        ;;
+    4)
+        windspeed_unit="kn"
+        ;;
+    *)
+        exit 5
+        ;;
+esac
+printf -- "windspeed_unit=\"%s\"\n" "${windspeed_unit}" >> $HOME/"${conf_file}"
+
+if [[ "$(printf -- "%s" "${location_and_units[3]}" | cut -d. -f 1)" = "1" ]] ; then
+    precipitation_unit="mm"
+elif [[ "$(printf -- "%s" "${location_and_units[3]}" | cut -d. -f 1)" = "2" ]]; then
+    precipitation_unit="inch"
+fi
+printf -- "precipitation_unit=\"%s\"\n" "${precipitation_unit}" >> $HOME/"${conf_file}"
+
+case "$(printf -- "%s" "${location_and_units[4]}" | cut -d. -f 1)" in 
+    1)
+        icon_type="coloured"
+        ;;
+    2)
+        icon_type="monochrome"
+        ;;
+    3)
+        icon_type="glyphs"
+		;;
+esac
+printf -- "icon_type=\"%s\"\n" "${icon_type}" >> $HOME/"${conf_file}"
+
+exit 0

@@ -23,7 +23,7 @@ function is_mute {
 }
 
 function send_notification {
-    notify-send.sh -i $2 -t 1000 -h string:x-dunst-stack-tag:volume -u normal "$1%" -h int:value:$1
+    dunstify -i $2 -t 1000 -h string:x-dunst-stack-tag:volume -u normal "$1%" -h int:value:$1
 }
 
 function get_icon {
@@ -58,7 +58,7 @@ fi
 echo ${glyph}
 }
 
-if [[ $1 == *"-F"* ]] || [[ $2 == *"-F"* ]]; then
+if [[ $1 == *"-f"* ]] || [[ $2 == *"-f"* ]]; then
 	get_glyph
 else
 	get_icon
@@ -67,7 +67,7 @@ fi
 volicon=$(get_icon)
 
 case $1$2 in
-	*-N*)
+	*-t*)
     echo "Vol: ${vol}%"
 	;;
 	*up*)
@@ -92,7 +92,7 @@ case $1$2 in
     	send_notification ${vol} ${notifyicon}
     else
     	amixer sset Master toggle -q
-		notify-send.sh -i "/usr/share/pmt2e/icons/vol-muted.svg" -t 1000 -h string:x-dunst-stack-tag:volume -u normal "Muted"
+		dunstify -i "/usr/share/pmt2e/icons/vol-muted.svg" -t 1000 -h string:x-dunst-stack-tag:volume -u normal "Muted"
 	fi
 	;;
 	*)

@@ -1,0 +1,79 @@
+#!/bin/bash
+# Author: purpleleaf <max at ganoia dot eu>
+
+# A utility to create jgmenus.
+
+function create_jgmenu () {
+
+declare -a menu_array
+
+show_help () {
+  printf -- "\n"
+  printf -- "Usage: $0 -c config_file | -m menu_file | -h | list of command to feed jgmenu\n"
+  printf -- "\n"
+  printf -- "  -h Show this help message and exit.\n"
+  printf -- "  -c config_file, use config_file to set jgmenu configuration.\n"
+  printf -- "  -m menu_file, use menu_file to fill jgmenu.\n\n"
+  printf -- "If -m is provided any other eventual argument passed to build the menu will be ignored.\n"
+  printf -- "Menu items must be passed in the form \"Menu name,/command/to/execute\".\n"
+  printf -- "\n"
+	exit 0	
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+	-h|--help)
+      show_help
+      ;;
+    -c|--config)
+      config_file="$2"
+	  mantain_config=true
+      shift 2
+      ;;
+    -m|--menu)
+      menu_file="$2"
+	  mantain_menu=true
+      shift 2
+      ;;
+    *)
+      if ! [[ $menu_file ]]; then 
+        menu_array+=("$1")
+	    shift 1
+      fi
+      ;;
+  esac
+done
+
+if [ ! -f "${config_file}" ]; then
+	config_file=$(mktemp -t jgmenu-config.XXXXXXXXXX)
+
+	cat <<'EOF' >${config_file}
+	stay_alive          = 0
+	tint2_look          = 1
+	position_mode		= ipc
+	menu_width          = 40
+	menu_border         = 1
+	item_height         = 20
+	font                = Sans 10
+	icon_size           = 0
+EOF
+fi
+
+if [ ! -f "${menu_file}" ]; then
+	menu_file=$(mktemp -t jgmenu-menu.XXXXXXXXXX)
+	IFS=$'\n'
+	for i in ${menu_array[@]}; do echo $i >> ${menu_file}; done 
+fi
+
+jgmenu --config-file=${config_file} --csv-file=${menu_file}
+
+if ! [[ $mantain_menu ]]; then
+rm -f ${menu_file}
+fi
+if ! [[ $mantain_config ]]; then
+rm -f ${config_file}
+fi
+
+}
+
+create_jgmenu "$@"
