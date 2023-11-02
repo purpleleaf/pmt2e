@@ -64,7 +64,6 @@ Dependencies: curl, jq, yad, awk, dunst (if you wants notifications).
 ## yad-box  volume-icon
 
 A slider changing the volume level, nothing more, nothing less.
---
 
 
 
