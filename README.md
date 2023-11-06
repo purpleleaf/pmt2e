@@ -28,7 +28,7 @@ pmw  settings are provided by yad, that is called at first run and can be recall
 
 `pmw -m`
 
-The yad settings windows let you choose your preferred  measure units, the weather forecast location, if you want light or dark themes icon or  font glyphs and if you prefer coloured or dark themed icons for notifications.
+The yad settings windows let you choose your preferred  measure units, the weather forecast location, if you want light or dark themed icon or  font glyphs as executor output and if you prefer coloured or dark themed icons for notifications.
 Fonts glyphs require some adjustment in tint2 settings (notably  may be necessary set an adequate horizontal padding).
 
 If you want you can also have  only text as output instead of icons, running this command:
