@@ -9,10 +9,9 @@
 # Amchart - https://www.amcharts.com
 # JoshuaKimsey - https://github.com/JoshuaKimsey/amCharts-SVG-Icons-Additions
 
-# Dependencies: curl, jq, yad, awk, dunst
+# Dependencies: curl, jq, yad, awk
 
 declare -a weather_data       # array to store data variables requested to open-meteo
-icons_dir="" #icons directory
 day=0 # Set default day to today for open-meteo settings
 timezone=$(/bin/ls -l /etc/localtime|/usr/bin/cut -d"/" -f7,8) # Set default time zone from system
 
@@ -80,14 +79,22 @@ source ~/.config/pmt2e/pmw.conf 2> /dev/null || exit 1
 # check if settings exist
 settings_error="There are problems with your PMW settings. \n Please delete $HOME/.config/pmt2e/pmw.conf \nand run pmw again."
 
-[[ -n "${latitude}" && -n "${longitude}" && -n "${location}" && -n "${temp_unit}" && -n "${windspeed_unit}" && -n "${precipitation_unit}" && -n "${icon_type}" ]] || show_errors "${settings_error}"
+[[ -n "${latitude}" && -n "${longitude}" && -n "${location}" && -n "${temp_unit}" && -n "${windspeed_unit}" && -n "${precipitation_unit}" && -n "${icon_type}" && -n "${notification_icon_type}" ]] || show_errors "${settings_error}"
 
-if [[ ${icon_type} == "coloured" ]]; then
-    icons_dir="/usr/share/pmt2e/wheather_icons" 
-elif [[ ${icon_type} == "monochrome" ]]; then
+if [ ${temp_unit} == "celsius" ]; then temp_degree="°C"; elif [ ${temp_unit} == "fahrenheit" ]; then temp_degree="°F"; fi
+
+if [[ ${icon_type} == "monochrome" ]]; then
     icons_dir="/usr/share/pmt2e/wheather_icons/dark" 
-elif [[ ${icon_type} == "glyphs" ]]; then
-	 show_glyphs=true
+elif [[ ${icon_type} == "coloured" ]]; then
+    icons_dir="/usr/share/pmt2e/wheather_icons" 
+else
+	show_glyphs=true
+fi
+
+if [[ ${notification_icon_type} == "monochrome" ]]; then
+    notification_icons_dir="/usr/share/pmt2e/wheather_icons/dark" 
+else
+    notification_icons_dir="/usr/share/pmt2e/wheather_icons" 
 fi
 
 [[ ${show_notification} == "true" ]] || [[ ${show_menu} == "true" ]] || \
@@ -100,6 +107,7 @@ fi
     echo "${icons_dir}/refresh.svg"
 fi
 }
+
 # translates the weather api's code numbers to text, and determines icons to use 
 function weather_icon_descriptor () {
     local epoch_time="$(date "+%s")" 
@@ -113,147 +121,147 @@ function weather_icon_descriptor () {
       case "${wc}" in
         0)
             wicon="clear-day.svg"
-            wtext="$(gettext 'Clear sky')"
+            wtext="Clear sky"
             wglyph=""
             ;;
         1)
-            wicon="clear-day.svg"
-            wtext="$(gettext 'Mainly clear')"
+            wicon="fair-day.svg"
+            wtext="Mainly clear"
             wglyph=""
             ;;
         2)
-            wicon="cloudy-1-day.svg"
-            wtext="$(gettext 'Partly cloudy')"
+            wicon="cloudy-2-day.svg"
+            wtext="Partly cloudy"
             wglyph=""
             ;;
         3)
             wicon="cloudy.svg"
-            wtext="$(gettext 'Overcast')"
+            wtext="Overcast"
             wglyph=""
             ;;
         45)
             wicon="fog.svg"
-            wtext="$(gettext 'Fog')"
+            wtext="Fog"
             wglyph=""
             ;;
         48)
             wicon="fog.svg"
-            wtext="$(gettext 'Rime fog')"
+            wtext="Rime fog"
             wglyph=""
             ;;
         51)
-            wicon="rainy-1.svg"
-            wtext="$(gettext 'Light drizzle')"
+            wicon="rainy-1-day.svg"
+            wtext="Light drizzle"
             wglyph=""
             ;;
         53)
-            wicon="rainy-1.svg"
-            wtext="$(gettext 'Moderate drizzle')"
+            wicon="rainy-2-day.svg"
+            wtext="Moderate drizzle"
             wglyph=""
             ;;
         55)
-            wicon="rainy-1.svg"
-            wtext="$(gettext 'Intense drizzle')"
+            wicon="rainy-3-day.svg"
+            wtext="Intense drizzle"
             wglyph=""
             ;;
         56)
             wicon="rain-and-sleet.svg"
-            wtext="$(gettext 'Light freezing drizzle')"
+            wtext="Light freezing drizzle"
             wglyph=""
             ;;
         57)
             wicon="rain-and-sleet.svg"
-            wtext="$(gettext 'Intense freezing drizzle')"
+            wtext="Intense freezing drizzle"
             wglyph=""
             ;;
         61)
-            wicon="rainy-1-day.svg"
-            wtext="$(gettext 'Slight rain')"
+            wicon="rainy-1.svg"
+            wtext="Slight rain"
             wglyph=""
             ;;
         63)
-            wicon="rainy-2-day.svg"
-            wtext="$(gettext 'Moderate rain')"
+            wicon="rainy-2.svg"
+            wtext="Moderate rain"
             wglyph=""
             ;;
         65)
-            wicon="rainy-3-day.svg"
-            wtext="$(gettext 'Intense rain')"
+            wicon="rainy-3.svg"
+            wtext="Intense rain"
             wglyph=""
             ;;
         66)
             wicon="rain-and-sleet.svg"
-            wtext="$(gettext 'Light freezing rain')"
+            wtext="Light freezing rain"
             wglyph=""
             ;;
         67)
             wicon="rain-and-sleet.svg"
-            wtext="$(gettext 'Intense freezing rain')"
+            wtext="Intense freezing rain"
             wglyph=""
             ;;
         71)
             wicon="snowy-1-day.svg"
-            wtext="$(gettext 'Slight snow fall')"
+            wtext="Slight snow fall"
             wglyph=""
             ;;
         73)
             wicon="snowy-2-day.svg"
-            wtext="$(gettext 'Moderate snow fall')"
+            wtext="Moderate snow fall"
             wglyph=""
             ;;
         75)
             wicon="snowy-3-day.svg"
-            wtext="$(gettext 'Intense snow fall')"
+            wtext="Intense snow fall"
             wglyph=""
             ;;
         77)
             wicon="snow-and-sleet.svg"
-            wtext="$(gettext 'Snow grains')"
+            wtext="Snow grains"
             wglyph=""
             ;;
         80)
             wicon="rainy-1.svg"
-            wtext="$(gettext 'Slight rain showers')"
+            wtext="Slight rain showers"
             wglyph=""
             ;;
         81)
             wicon="rainy-2.svg"
-            wtext="$(gettext 'Moderate rain showers')"
+            wtext="Moderate rain showers"
             wglyph=""
             ;;
         82)
             wicon="rainy-3.svg"
-            wtext="$(gettext 'Intense rain showers')"
+            wtext="Intense rain showers"
             wglyph=""
             ;;
         85)
             wicon="snowy-1.svg"
-            wtext="$(gettext 'Slight snow showers')"
+            wtext="Slight snow showers"
             wglyph=""
             ;;
         86)
             wicon="snowy-3.svg"
-            wtext="$(gettext 'Heavy snow showers')"
+            wtext="Heavy snow showers"
             wglyph=""
             ;;
         95)
             wicon="scattered-thunderstorms.svg"
-            wtext="$(gettext 'Thunderstorm')"
+            wtext="Thunderstorm"
             wglyph=""
             ;;
          96)
             wicon="thunderstorms.svg"
-            wtext="$(gettext 'Thunderstorm with slight hail')"
+            wtext="Thunderstorm with slight hail"
             wglyph=""
             ;;
         99)
             wicon="thunderstorms.svg"
-            wtext="$(gettext 'Thunderstorm with heavy hail')"
+            wtext="Thunderstorm with heavy hail"
             wglyph=""
             ;;
         *)
             wicon="default-no.svg"
-            wtext="$(gettext 'unknown')"
+            wtext="unknown"
             wglyph="󰨹"
             ;;
       esac
@@ -262,147 +270,147 @@ function weather_icon_descriptor () {
       case "${wc}" in
         0)
             wicon="clear-night.svg"
-            wtext="$(gettext 'Clear sky')"
+            wtext="Clear sky"
             wglyph=""
             ;;
         1)
-            wicon="clear-night.svg"
-            wtext="$(gettext 'Mainly clear')"
+            wicon="fair-night.svg"
+            wtext="Mainly clear"
             wglyph=""
             ;;
         2)
             wicon="cloudy-2-night.svg"
-            wtext="$(gettext 'Partly cloudy')"
+            wtext="Partly cloudy"
             wglyph=""
             ;;
         3)
             wicon="cloudy.svg"
-            wtext="$(gettext 'Overcast')"
+            wtext="Overcast"
             wglyph=""
             ;;
         45)
             wicon="fog.svg"
-            wtext="$(gettext 'Fog')"
+            wtext="Fog"
             wglyph=""
             ;;
         48)
             wicon="fog.svg"
-            wtext="$(gettext 'Rime fog')"
+            wtext="Rime fog"
             wglyph=""
             ;;
         51)
-            wicon="rainy-1.svg"
-            wtext="$(gettext 'Light drizzle')"
+            wicon="rainy-1-night.svg"
+            wtext="Light drizzle"
             wglyph=""
             ;;
         53)
-            wicon="rainy-1.svg"
-            wtext="$(gettext 'Moderate drizzle')"
+            wicon="rainy-2-night.svg"
+            wtext="Moderate drizzle"
             wglyph=""
             ;;
         55)
-            wicon="rainy-1.svg"
-            wtext="$(gettext 'Intense drizzle')"
+            wicon="rainy-3-night.svg"
+            wtext="Intense drizzle"
             wglyph=""
             ;;
         56)
             wicon="rain-and-sleet.svg"
-            wtext="$(gettext 'Light freezing drizzle')"
+            wtext="Light freezing drizzle"
             wglyph=""
             ;;
         57)
             wicon="rain-and-sleet.svg"
-            wtext="$(gettext 'Intense freezing drizzle')"
+            wtext="Intense freezing drizzle"
             wglyph=""
             ;;
         61)
-            wicon="rainy-1-night.svg"
-            wtext="$(gettext 'Slight rain')"
+            wicon="rainy-1.svg"
+            wtext="Slight rain"
             wglyph=""
             ;;
         63)
-            wicon="rainy-2-night.svg"
-            wtext="$(gettext 'Moderate rain')"
+            wicon="rainy-2.svg"
+            wtext="Moderate rain"
             wglyph=""
             ;;
         65)
-            wicon="rainy-3-night.svg"
-            wtext="$(gettext 'Intense rain')"
+            wicon="rainy-3.svg"
+            wtext="Intense rain"
             wglyph=""
             ;;
         66)
             wicon="rain-and-sleet.svg"
-            wtext="$(gettext 'Light freezing rain')"
+            wtext="Light freezing rain"
             wglyph=""
             ;;
         67)
             wicon="rain-and-sleet.svg"
-            wtext="$(gettext 'Intense freezing rain')"
+            wtext="Intense freezing rain"
             wglyph=""
             ;;
         71)
             wicon="snowy-1-day.svg"
-            wtext="$(gettext 'Slight snow fall')"
+            wtext="Slight snow fall"
             wglyph=""
             ;;
         73)
             wicon="snowy-2-day.svg"
-            wtext="$(gettext 'Moderate snow fall')"
+            wtext="Moderate snow fall"
             wglyph=""
             ;;
         75)
             wicon="snowy-3-day.svg"
-            wtext="$(gettext 'Intense snow fall')"
+            wtext="Intense snow fall"
             wglyph=""
             ;;
         77)
             wicon="snow-and-sleet.svg"
-            wtext="$(gettext 'Snow grains')"
+            wtext="Snow grains"
             wglyph=""
             ;;
         80)
             wicon="rainy-1.svg"
-            wtext="$(gettext 'Slight rain showers')"
+            wtext="Slight rain showers"
             wglyph=""
             ;;
         81)
             wicon="rainy-2.svg"
-            wtext="$(gettext 'Moderate rain showers')"
+            wtext="Moderate rain showers"
             wglyph=""
             ;;
         82)
             wicon="rainy-3.svg"
-            wtext="$(gettext 'Intense rain showers')"
+            wtext="Intense rain showers"
             wglyph=""
             ;;
         85)
             wicon="snowy-1.svg"
-            wtext="$(gettext 'Slight snow showers')"
+            wtext="Slight snow showers"
             wglyph=""
             ;;
         86)
             wicon="snowy-3.svg"
-            wtext="$(gettext 'Heavy snow showers')"
+            wtext="Heavy snow showers"
             wglyph=""
             ;;
         95)
             wicon="scattered-thunderstorms.svg"
-            wtext="$(gettext 'Thunderstorm')"
+            wtext="Thunderstorm"
             wglyph=""
             ;;
          96)
             wicon="thunderstorms.svg"
-            wtext="$(gettext 'Thunderstorm with slight hail')"
+            wtext="Thunderstorm with slight hail"
             wglyph=""
             ;;
         99)
             wicon="thunderstorms.svg"
-            wtext="$(gettext 'Thunderstorm with heavy hail')"
+            wtext="Thunderstorm with heavy hail"
             wglyph=""
             ;;
         *)
             wicon="default-no.svg"
-            wtext="$(gettext 'unknown')"
+            wtext="unknown"
             wglyph="󰨹"
             ;;
       esac       
@@ -476,9 +484,10 @@ open_meteo_response=$(
   curl -s -G --output ${weather_file} --write-out %{http_code} \
     -d "latitude=${latitude}" \
     -d "longitude=${longitude}" \
-    -d "daily=weathercode,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_sum,precipitation_probability_max,windspeed_10m_max,windgusts_10m_max,winddirection_10m_dominant" \
-    -d "current_weather=true&temperature_unit=${temp_unit}&windspeed_unit=${windspeed_unit}&precipitation_unit=${precipitation_unit}" \
-    -d "timezone=${timezone}" \
+    -d "daily=weathercode,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_sum,precipitation_probability_max,windspeed_10m_max,winddirection_10m_dominant" \
+    -d "current=temperature_2m,relative_humidity_2m,precipitation,weathercode,cloud_cover,wind_speed_10m,wind_direction_10m" \
+    -d "temperature_unit=${temp_unit}&windspeed_unit=${windspeed_unit}&precipitation_unit=${precipitation_unit}" \
+    -d "timezone=${timezone}&forecast_days=1" \
     https://api.open-meteo.com/v1/forecast
 )
 
@@ -497,46 +506,50 @@ if [ ${open_meteo_response} -ne "200" ]; then
 	show_errors "PM Weather -  Something went wrong!"
 else
 	#check if json contains necessary data
-	if [[  ${weather_data} != *"current_weather"* ]] || [[  ${weather_data} != *"daily_units"* ]] ; then   
+	if [[  ${weather_data} != *"current"* ]] || [[  ${weather_data} != *"daily_units"* ]] ; then   
 		show_errors "PM Weather - No useful json data"
 	fi
 fi
 
 # Extract current weather variables
-current_time=$(jq -r -c ".current_weather.time" <<< ${weather_data})
-current_temp=$(jq -r -c ".current_weather.temperature" <<< ${weather_data})
-current_wind_speed=$(jq -r -c ".current_weather.windspeed" <<< ${weather_data})
-current_wind_direction=$(jq -r -c ".current_weather.winddirection" <<< ${weather_data})
-current_weathercode=$(jq -r -c ".current_weather.weathercode" <<< ${weather_data})
-print_temp_unit=$(jq -r -c ".current_weather_units.temperature" <<< ${weather_data})
-current_windspeed_unit=$(jq -r -c ".current_weather_units.windspeed" <<< ${weather_data})
+current_temp=$(jq -r -c ".current.temperature_2m" <<< ${weather_data})
+current_wind_speed=$(jq -r -c ".current.wind_speed_10m" <<< ${weather_data})
+current_wind_direction=$(jq -r -c ".current.wind_direction_10m" <<< ${weather_data})
+current_cloud_cover=$(jq -r -c ".current.cloud_cover" <<< ${weather_data})
+current_weathercode=$(jq -r -c ".current.weathercode" <<< ${weather_data})
+relative_humidity=$(jq -r -c ".current.relative_humidity_2m" <<< ${weather_data})
+precipitation=$(jq -r -c ".current.precipitation" <<< ${weather_data})
 # Extract forecast variables
-time=$(jq -r -c ".daily.time[${day}]" <<< ${weather_data})
 sunset=$(jq -r -c ".daily.sunset[${day}]" <<< ${weather_data})
 sunrise=$(jq -r -c ".daily.sunrise[${day}]" <<< ${weather_data})
 precip_sum=$(jq -r -c ".daily.precipitation_sum[${day}]" <<< ${weather_data})
 precip_percentage=$(jq -r -c ".daily.precipitation_probability_max[${day}]" <<< ${weather_data})
 temp_low=$(jq -r -c ".daily.temperature_2m_min[${day}]" <<< ${weather_data})
 temp_high=$(jq -r -c ".daily.temperature_2m_max[${day}]" <<< ${weather_data})
+windspeed=$(jq -r -c ".daily.windspeed_10m_max[${day}]" <<< ${weather_data})
+winddirection=$(jq -r -c ".daily.winddirection_10m_dominant[${day}]" <<< ${weather_data})
+
 weathercode=$(jq -r -c ".daily.weathercode[${day}]" <<< ${weather_data})
-precip_percentage_unit="%"
-precip_sum_unit=$(jq -r -c ".daily_units.precipitation_sum" <<< ${weather_data})
 
 weather_icon_descriptor ${current_weathercode} "curr_weather"
-weather_icon_descriptor ${current_weathercode} "forecast_weather"
+weather_icon_descriptor ${weathercode} "forecast_weather"
 
 if [[ ${show_notification} == "true" ]]; then
 	notif_subject="${location}"
-    notif_body="Current Weather:\n
-	${current_temp} ${print_temp_unit} - ${curr_weather["text"]}\n
-	Wind: ${current_wind_speed} ${current_windspeed_unit} `deg_to_direction ${current_wind_direction}`\n
+    notif_body="\nCurrent Weather:\n
+	${curr_weather["glyph"]} ${current_temp}${temp_degree} - ${curr_weather["text"]}\n
+    Humidity: ${relative_humidity}% - Cloud Cover: ${current_cloud_cover}%\n
+	Wind: ${current_wind_speed} ${windspeed_unit} `deg_to_direction ${current_wind_direction}`\n
+    Precipitation: ${precipitation} ${precipitation_unit}\n\n
 	Forecast:\n
-	${curr_weather["glyph"]} ${forecast_weather["text"]} - $temp_low${print_temp_unit}/$temp_high${print_temp_unit}\n
-	Precipitation: $precip_sum $precip_sum_unit\n
-	Prec. probability: $precip_percentage$precip_percentage_unit\n
+	${forecast_weather["glyph"]} ${forecast_weather["text"]} - $temp_low${temp_degree}/$temp_high${temp_degree}\n
+	Precipitation: $precip_sum ${precipitation_unit}\n
+	Prec. probability: $precip_percentage%\n
 	Sunrise: `date -d $sunrise +%H:%M`\n
 	Sunset:  `date -d $sunset +%H:%M`"
-	dunstify -i "${icons_dir}/${curr_weather["icon"]}" "$notif_subject" "$(echo ${notif_body} | sed 's/^[ \t]*//')"
+
+	dunstify -i "${notification_icons_dir}/${curr_weather["icon"]}" "$notif_subject" "$(echo ${notif_body} | sed 's/^[ \t]*//')"
+
 	exit
 fi
 

@@ -10,13 +10,99 @@
 # Dependencies: `alsa-utils`
 # arguments: [up] | [down] | [toggle] | [<level>] [-N]
 
+scriptname=`basename $0`
+action=""
+output=""
+
+die() { echo "$*" 1>&2 ; exit 1; }
+
+while getopts ":hudmps:ift" opt; do
+  case ${opt} in
+# allow only one action between help, set, up, down, toggle
+    h)
+      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
+      action="help"
+	  output="help"
+      ;;
+    p)
+      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
+      action="print"
+      ;;
+    s)
+      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
+      action="set"
+      if [[ "$OPTARG" =~ ^[0-9]+$ ]] && [[ "$OPTARG" -ge 0 ]] && [[ "$OPTARG" -le 100 ]]; then
+      input_vol="$OPTARG"
+      else
+        echo "error: -s argument is not a valid number" >&2; exit 1 
+      fi
+      ;;
+    u)
+      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
+      action="up"
+      ;;
+    d)
+      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
+      action="down"
+      ;;
+    m)
+      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
+      action="toggle"
+      ;;
+# allow only one option between icon, text or font glyph
+    i)
+      [ -n "$output" ] && die "Only one action can be chosen between -i -f -t"
+      output="icon"
+      ;;
+    f)
+      [ -n "$output" ] && die "Only one action can be chosen between -i -f -t"
+      output="glyph"
+      ;;
+    t)
+      [ -n "$output" ] && die "Only one action can be chosen between -i -f -t"
+      output="text"
+      ;;
+# require an argument for -s option 
+    :)
+      die "Option -"$OPTARG" requires an argument"
+      ;;
+    *)
+      die "Invalid option -"$OPTARG""
+      ;;
+  esac
+done
+
+# exit if $action and/or $output are not set
+if [[ ! -n "$action" ]] || [[ ! -n "$output" ]]; then
+die "$scriptname requires both an action [-h | -u | -d | -m | -s | p] and an output [-i | -f | -t] option. \
+Please run \"$scriptname -h\" for usage."
+fi
+
+# Get actual volume level
 # Check volume for Lefth/Right audio channel or Mono Channel
 control="Master"
-output=`amixer sget $control`
-levels=`echo "$output" | grep -o -e '\[[[:digit:]]*%\]'`
+levels=$(amixer sget $control | grep -o -e '\[[[:digit:]]*%\]')
 num=`echo "$levels" | wc -l`
 sum=`echo "$levels 0" | tr '[%]\n' '  + ' | xargs expr`
 vol=`expr $sum / $num`
+ 
+
+show_help () {
+  printf -- "\nUsage: $scriptname [ -h | -n | -m | -m ] [ -i | -f | -t ]\n"
+  printf -- "\n"
+  printf -- "  -h, Show this help message and exit.\n"
+  printf -- "  -s, set volume to the number passed as argument.\n"
+  printf -- "  -u, raise volume.\n"
+  printf -- "  -d, lower volume.\n"
+  printf -- "  -m, toggle mute.\n\n"
+  printf -- "  -i, output an icon path to Tint2.\n"
+  printf -- "  -f, output a font glyph instead of icon.\n"
+  printf -- "  -t, output text instead of icon.\n"
+  printf -- "Only one option for both the two option group must be provided.\n"
+  printf -- "If -s is selected an integer number (0-100) must be provided.\n"
+  printf -- "If -h is selected no other option is required.\n\n"
+  exit 0	
+}
 
 function is_mute {
     amixer get Master | grep '%' | grep -oE '[^ ]+$' | grep off > /dev/null
@@ -58,47 +144,52 @@ fi
 echo ${glyph}
 }
 
-if [[ $1 == *"-f"* ]] || [[ $2 == *"-f"* ]]; then
-	get_glyph
-else
-	get_icon
-fi
-
 volicon=$(get_icon)
 
-case $1$2 in
-	*-t*)
-    echo "Vol: ${vol}%"
-	;;
-	*up*)
-	# Set the volume on (if it was muted)   
-	if is_mute ; then
-    amixer sset Master toggle -q
+# print action only output to tint2, no notification
+case ${action} in
+  help)
+    show_help
+    exit
+    ;;
+  set)
+    amixer set Master "${input_vol}"% -q
+    send_notification ${input_vol} ${volicon}
+    ;;
+  up)
+    if is_mute ; then
+      amixer sset Master toggle -q
     fi
     amixer sset Master 5%+ -q
     send_notification ${vol} ${volicon}
-	;;
-	*down*)
-	if is_mute ; then
-     amixer -D default set Master on > /dev/null
+    ;;
+  down)
+    if is_mute ; then
+      amixer -D default set Master on > /dev/null
     fi
     amixer sset Master 5%- -q
     send_notification ${vol} ${volicon}
-	;;
-	*toggle*)
-	if is_mute ; then
-    	amixer sset Master toggle -q
-		notifyicon=$(get_icon)
-    	send_notification ${vol} ${notifyicon}
+    ;;
+  toggle)
+    if is_mute ; then
+      amixer sset Master toggle -q
+      notifyicon=$(get_icon)
+      send_notification ${vol} ${notifyicon}
     else
-    	amixer sset Master toggle -q
-		dunstify -i "/usr/share/pmt2e/icons/vol-muted.svg" -t 1000 -h string:x-dunst-stack-tag:volume -u normal "Muted"
-	fi
-	;;
-	*)
-    # If none of above, check if argument is a valid int, set volume if so
-    if [[ $(($1)) == $1 ]] && [[ "$1" -ge 0 ]] && [[ "$1" -le 100 ]]; then
-        amixer set Master "$1"% -q
+      amixer sset Master toggle -q
+      dunstify -i "/usr/share/pmt2e/icons/vol-muted.svg" -t 1000 -h string:x-dunst-stack-tag:volume -u normal "Muted"
     fi
-	;;
+    ;;
+esac
+
+case $output in
+  glyph)
+    get_glyph
+    ;;
+  text)
+    echo "Vol: ${vol}%"
+    ;;
+  icon)
+    get_icon
+    ;;
 esac

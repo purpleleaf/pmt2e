@@ -21,13 +21,15 @@ longitude=''                  #                             needed by https://ap
 temp_unit=''                  #                             needed by https://api.open-meteo.com/v1/forecast
 windspeed_unit=''             # kmh, ms, mph, kn            needed by https://api.open-meteo.com/v1/forecast
 precipitation_unit=''		  #                             needed by https://api.open-meteo.com/v1/forecast
-icons_dir="/usr/share/pmt2e/wheather_icons/dark"    # weather icons location
+icons_dir="/usr/share/pmt2e/wheather_icons"    # weather icons location
+notification_icon_dir=
 conf_file=".config/pmt2e/pmw.conf"
 # set yad combo boxes selection text
 yad_temp='1. celsius!2. fahrenheit'
 yad_wind='1. km/h!2. m/s!3. mph!4. knots'
 yad_precipitation='1. mm!2. inch'
 yad_icon_type='1. Coloured Icons!2. Monochrome Icons!3. Font Glyphs'
+yad_dunst_icon_type='1. Coloured Icons!2. Monochrome Icons'
 
 # function to show yad dialog error 
 show_errors () {
@@ -44,8 +46,8 @@ if [[ -f ~/.config/pmt2e/pmw.conf ]]; then
 	conf_exist=true
 
 	# use positioning selection to set default units
-	# $1=yad_[temp|wind|precipitation|_icon_type]
-	# $2=[temp|wind|precipitation|icon]_match
+	# $1=yad_[temp|wind|precipitation|_icon_type|_dunst_icon_type]
+	# $2=[temp|wind|precipitation|icon|notification_icon]_match
 	# ref https://unix.stackexchange.com/questions/369818/how-to-insert-a-string-into-a-text-variable-at-specified-position
 	select_default_unit () { 
 	local text="$1"
@@ -86,6 +88,12 @@ if [[ -f ~/.config/pmt2e/pmw.conf ]]; then
 	elif [[ $icon_type == "glyphs" ]]; then 
  	   icon_match="3"
 	fi
+
+	if [[ $notification_icon_type == "coloured" ]]; then
+	    notification_icon_match="1"
+	elif [[ $notification_icon_type == "monochrome" ]]; then
+	    notification_icon_match="2"
+	fi
 else
 	if [[ ! -d $HOME/.config/pmt2e ]]; then
 		mkdir -p $HOME/.config/pmt2e
@@ -107,13 +115,14 @@ location_and_units_args=(
 --field="Temperature Unit:CB" 
 --field="Wind Speed Unit:CB"
 --field="Precipitation Unit:CB"
---field="Icon type:CB"
+--field="Tint2 Icon type:CB"
+--field="Notification Icon type:CB"
 )
 
 if [[ ${conf_exist} == "true" ]]; then
-location_and_units_args+=("${location}" "$(select_default_unit "$yad_temp" "$temp_match")" "$(select_default_unit "$yad_wind" "$wind_match")" "$(select_default_unit "$yad_precipitation" "$precipitation_match")" "$(select_default_unit "$yad_icon_type" "$icon_match")")
+location_and_units_args+=("${location}" "$(select_default_unit "$yad_temp" "$temp_match")" "$(select_default_unit "$yad_wind" "$wind_match")" "$(select_default_unit "$yad_precipitation" "$precipitation_match")" "$(select_default_unit "$yad_icon_type" "$icon_match")" "$(select_default_unit "$yad_dunst_icon_type" "$notification_icon_match")")
 else
-location_and_units_args+=( "" "${yad_temp}" "${yad_wind}"  "${yad_precipitation}"  "${yad_icon_type}" )
+location_and_units_args+=( "" "${yad_temp}" "${yad_wind}"  "${yad_precipitation}"  "${yad_icon_type}" "${yad_dunst_icon_type}" )
 fi
 
 oldifs="${IFS}"
@@ -248,5 +257,15 @@ case "$(printf -- "%s" "${location_and_units[4]}" | cut -d. -f 1)" in
 		;;
 esac
 printf -- "icon_type=\"%s\"\n" "${icon_type}" >> $HOME/"${conf_file}"
+
+case "$(printf -- "%s" "${location_and_units[5]}" | cut -d. -f 1)" in 
+    1)
+        notification_icon_type="coloured"
+        ;;
+    2)
+        notification_icon_type="monochrome"
+        ;;
+esac
+printf -- "notification_icon_type=\"%s\"\n" "${notification_icon_type}" >> $HOME/"${conf_file}"
 
 exit 0
