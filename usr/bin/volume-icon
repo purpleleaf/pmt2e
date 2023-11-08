@@ -7,8 +7,7 @@
 # Max Franco purpleleaf@ganoia.eu
 # License: GPL3
 
-# Dependencies: `alsa-utils`
-# arguments: [up] | [down] | [toggle] | [<level>] [-N]
+# Dependencies: alsa-utils dunst
 
 scriptname=`basename $0`
 action=""

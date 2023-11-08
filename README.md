@@ -6,7 +6,7 @@ Forked from [t2ec](https://github.com/nwg-piotr), pmt2e is written with these pu
 
   * substitution of zenity with yad
 
-  * add use of font glyphs beside text and icons output
+  * add use of font glyphs beside text and icons output (requires a [Nerd Font](https://www.nerdfonts.com/) of your  choice)
 
   * remove  the use of a single  scripts to invoke all the others
 ; this choice in my opinion simplifies  the use of the scripts reducing the  number of options
@@ -39,11 +39,44 @@ An help message is displayed using the command:
 
 pmw -h
 
-Dependencies: curl, jq, yad, awk, dunst (if you wants notifications).
+Dependencies: curl, jq, yad, awk, dunst.
 
 ##  volume-icon
 
 volume-icon display an icon  as tint2 executor showing current volume level.  Command can be linked in executor to mouse event  to raise or low volume level and to toggle mute.
+
+Usage: volume-icon [ -h | -n | -m | -m ] [ -i | -f | -t ]
+
+  -h, Show this help message and exit.
+  -s, set volume to the number passed as argument.
+  -u, raise volume.
+  -d, lower volume.
+  -m, toggle mute.
+
+  -i, output an icon path to Tint2.
+  -f, output a font glyph instead of icon.
+  -t, output text instead of icon.
+Only one option for both the two option group must be provided.
+If -s is selected an integer number (0-100) must be provided.
+If -h is selected no other option is required.
+
+Dependencies: alsa-utils dunst.
+
+##  battery-icon
+
+battery-icon display an icon  as tint2 executor showing current battery level.  Command can be linked to mouse event in executor, to show a notification. If battery level goes under 5% an alert sound is played.
+
+Usage: battery-icon [ -h | -n | -m | -t | -f | -i ]
+
+  -h, Show this help message and exit.
+  -n, Show notification.
+  -m, Show jgmenu.
+  -t, show only text as tint2 executor output.
+  -f, show a font gyph as tint2 executor output.
+  -i, show an icon as tint2 executor output.
+If multiple arguments are provided, only the first one will considered
+
+Dependencies: acpi ogg123 (vorbis-tools) dunst.
 
 ## yad-box  volume-icon
 
@@ -65,7 +98,7 @@ Menu items must be passed in the form "Menu name,/command/to/execute.
 ```
 You could directly use jgmenu --vsimple, but in my opinion createjgmenu is more intuitive , if  executed without config file produce an already integrated tint2 menu and menu items  can be passed to command line in a simpler way.
 
-Dependencies: jgmenu
+Dependencies: jgmenu.
 
 
 
