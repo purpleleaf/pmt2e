@@ -105,7 +105,7 @@ location_and_units_args=(
 --title="Poorman weather - Settings"
 --image="${icons_dir}/equator.svg"
 --center
---text="Select a place, your measuring units and your desidered icont type.\nRetrieving the latitude and longitude coordinates may take a few seconds"
+--text="Select a location, your measuring units and desired icon type.\nRetrieving the latitude and longitude coordinates may take a few seconds"
 --width=460
 --height=220
 --window-icon="${icons_dir}"/cloudy-1-day.svg
