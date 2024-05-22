@@ -179,6 +179,8 @@ case ${action} in
       dunstify -i "/usr/share/pmt2e/icons/vol-muted.svg" -t 1000 -h string:x-dunst-stack-tag:volume -u normal "Muted"
     fi
     ;;
+    print)
+    :
 esac
 
 case $output in
