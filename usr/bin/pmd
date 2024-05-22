@@ -1,0 +1,137 @@
+#!/bin/bash
+
+# Dependencies xdotool wmctrl createjgmenu (for desktops menu)
+
+declare -a menu_args
+
+scriptname=`basename $0`
+action=""
+output=""
+
+die() { echo "$*" 1>&2 ; exit 1; }
+help_error_action="Only one action can be chosen between -h -n -p -m -w"
+help_error_output="Only one action can be chosen between -i -f -t -x"
+
+while getopts ":hnopmrwift" opt; do
+  case ${opt} in
+# allow only one action between help, set, up, down, toggle
+    h)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="help"
+	  output="help"
+      ;;
+    n)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="next"
+      ;;
+    p)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="previous"
+      ;;
+    o)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="output"
+      ;;
+    m)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="menu"
+      ;;
+    r)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="right_menu"
+      ;;
+    w)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="windows"
+      output="windows"
+      ;;
+# allow only one option between icon, text or font glyph
+    i)
+      [ -n "$output" ] && die "${help_error_action}"
+      output="icon"
+      ;;
+    f)
+      [ -n "$output" ] && die "${help_error_action}"
+      output="glyph"
+      ;;
+    t)
+      [ -n "$output" ] && die "${help_error_action}"
+      output="text"
+      ;;
+# require an argument for -s option 
+    :)
+      die "Option -"$OPTARG" requires an argument"
+      ;;
+    *)
+      die "Invalid option -"$OPTARG""
+      ;;
+  esac
+done
+
+shift $((OPTIND-1))
+
+# exit if $action and/or $output are not set
+if [[ ! -n "$action" ]] || [[ ! -n "$output" ]]; then
+die "$scriptname requires both an action [-h | -n | -p | -m] and an output [-i | -f | -t] option. \
+Please run \"$scriptname -h\" for usage."
+fi
+
+curr_desktop=$(xdotool get_desktop)
+
+case ${action} in
+  help)
+    show_help
+    exit
+    ;;
+  next)
+    xdotool set_desktop --relative 1
+    ;;
+  previous)
+    xdotool set_desktop --relative -- -1
+    ;;
+  menu)
+    desktop_num=$(xdotool get_num_desktops)
+    for (( i=1; i <= $desktop_num; i++ )); do
+      menu_args+=("Desktop $i,xdotool set_desktop $(($i-1)) ")
+    done
+    createjgmenu "^sep(Move to:)" "${menu_args[@]}"
+    ;;
+  right_menu)
+    desktop_num=$(xdotool get_num_desktops)
+    windows=$(wmctrl -l | awk -v var=$curr_desktop '{if ($2 == var) print $0;}' | cut -d' ' -f1)
+    if [[ -n ${windows} ]]; then
+      for (( i=1; i <= $desktop_num; i++ )); do
+        if [ $(($i-1)) -eq ${curr_desktop} ]; then
+          continue
+        fi
+        menu_args+=("Desktop $i, pmd -w ${curr_desktop} $(($i-1)) ")
+      done
+      createjgmenu "^sep(Move Windows to:)" "${menu_args[@]}"
+    else
+      createjgmenu "^sep(No window to move)"
+    fi
+    ;;
+  windows)
+    windows=$(wmctrl -l | awk -v var=$1 '{if ($2 == var) print $0;}' | cut -d' ' -f1)
+    for window in $windows; do
+      xdotool set_desktop_for_window $window $2
+      xdotool set_desktop $2
+    done
+    exit 0
+    ;;
+esac
+
+curr_desktop=$(( $(xdotool get_desktop)+1 ))
+
+case $output in
+  glyph)
+    echo "󰍺 <span font-size=\"xx-small\">${curr_desktop}</span>"
+    ;;
+  text)
+    echo "Desk: ${curr_desktop}"
+    ;;
+  icon)
+    echo "/usr/share/pmt2e/icons/desktop.svg"
+    echo ${curr_desktop}
+    ;;
+esac

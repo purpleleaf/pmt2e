@@ -1,0 +1,160 @@
+#!/bin/bash
+
+# This script displays an appropriate brightness icon according to the brightness level by `xbacklight` command
+
+# Author: purpleleaf
+# e-mail: max@ganoia.eu
+# Project: https://github.com/purpleleaf/pmt2e
+# License: GPL3
+
+# Dependencies: xbacklight dunst
+
+scriptname=`basename $0`
+action=""
+output=""
+
+die() { echo "$*" 1>&2 ; exit 1; }
+help_error_action="Only one action can be chosen between -h -s -u -d"
+help_error_output="Only one action can be chosen between -i -f -t"
+
+while getopts ":huds:iftx" opt; do
+  case ${opt} in
+# allow only one action between help, set, up, down, toggle
+    h)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="help"
+	  output="help"
+      ;;
+    s)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="set"
+      if [[ "$OPTARG" =~ ^[0-9]+$ ]] && [[ "$OPTARG" -ge 0 ]] && [[ "$OPTARG" -le 100 ]]; then
+      input_bri="$OPTARG"
+      else
+        die "error: -s argument is not a valid number" 
+      fi
+      ;;
+    u)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="up"
+      ;;
+    d)
+      [ -n "$action" ] && die "${help_error_action}"
+      action="down"
+      ;;
+# allow only one option between icon, text or font glyph
+    i)
+      [ -n "$output" ] && die "${help_error_output}"
+      output="icon"
+      ;;
+    f)
+      [ -n "$output" ] && die "${help_error_output}"
+      output="glyph"
+      ;;
+    t)
+      [ -n "$output" ] && die "${help_error_output}"
+      output="text"
+      ;;
+    x)
+      [ -n "$output" ] && die "${help_error_output}"
+      output="nooutput"
+      ;;
+# require an argument for -s option 
+    :)
+      die "Option -"$OPTARG" requires an argument"
+      ;;
+    *)
+      die "Invalid option -"$OPTARG""
+      ;;
+  esac
+done
+
+# exit if $action and/or $output are not set
+if [[ ! -n "$action" ]] || [[ ! -n "$output" ]]; then
+die "$scriptname requires both an action [-h | -s | -u | -d ] and an output [-i | -f | -t] option. \
+Please run \"$scriptname -h\" for usage."
+fi
+
+show_help () {
+  printf -- "\nUsage: $scriptname [ -h | -s | -u | -d ] [ -i | -f | -t ]\n"
+  printf -- "\n"
+  printf -- "  -h, Show this help message and exit.\n"
+  printf -- "  -s, set brightness to the number passed as argument.\n"
+  printf -- "  -u, raise brightness.\n"
+  printf -- "  -d, lower brightness.\n"
+  printf -- "  -i, output an icon path to Tint2.\n"
+  printf -- "  -f, output a font glyph instead of icon.\n"
+  printf -- "  -t, output text instead of icon.\n"
+  printf -- "  -x, no output, for use outside of tint2.\n"
+  printf -- "Only one option for both the two option group must be provided.\n"
+  printf -- "If -s is selected an integer number (0-100) must be provided.\n"
+  printf -- "If -h is selected no other option is required.\n\n"
+  exit 0	
+}
+
+function send_notification {
+    dunstify -i $2 -t 1000 -h string:x-dunst-stack-tag:brightness -u normal "$1%" -h int:value:$1
+}
+
+b=$(xbacklight -get)
+bri=$(echo $b | awk '{ printf"%0.0f\n", $1 }')
+
+function get_icon {
+if [[ "$bri" -gt "90" ]]; then
+  icon="/usr/share/pmt2e/icons/bri-full.svg"
+elif [[ "$bri" -gt "50" ]]; then
+  icon="/usr/share/pmt2e/icons/bri-high.svg"
+elif [[ "$bri" -gt "30" ]]; then
+  icon="/usr/share/pmt2e/icons/bri-medium.svg"
+else
+  icon="/usr/share/pmt2e/icons/bri-low.svg"
+fi
+echo ${icon}
+}
+
+function get_glyph {
+if [[ ${bri} -ge 66 ]]; then
+  glyph="󰃚"
+elif [[ ${bri} -ge 33 ]]; then
+  glyph="󰃛"
+else
+  glyph="󰃜"
+fi
+echo ${glyph} 
+}
+
+briicon=$(get_icon)
+
+case ${action} in
+  help)
+    show_help
+    exit
+    ;;
+  set)
+    xbacklight -set "${input_bri}"
+    send_notification ${input_bri} ${briicon}
+    ;;
+  up)
+    xbacklight +5
+    send_notification ${bri} ${briicon}
+    ;;
+  down)
+    xbacklight -5
+    send_notification ${bri} ${briicon}
+    ;;
+esac
+
+case $output in
+  glyph)
+    get_glyph
+    ;;
+  text)
+    echo "Bri: ${bri}%"
+    ;;
+  icon)
+    get_icon
+    ;;
+  nooutput)
+    exit 0
+    ;;
+esac

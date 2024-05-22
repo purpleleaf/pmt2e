@@ -1,0 +1,96 @@
+#!/bin/bash
+
+#set variables
+#network icons path
+iconpath="/usr/share/pmt2e/icons"
+
+#check if a wifi net exist
+wifi_link=`iw dev wlan0 link 2> /dev/null`
+if  [ "$(iw dev wlan0 link 2> /dev/null)" != "Not connected." ]; then   
+  wifi_is_connected=true
+  wifi_name=$(iwgetid | awk -F '"' '{ print $2 }')
+  wifistrength=`iwctl station wlan0 show | awk '/dBm/ {print $2}'`
+  # convert signal to percentage quality
+  # https://stackoverflow.com/questions/15797920/how-to-convert-wifi-signal-strength-from-quality-percent-to-rssi-dbm
+  if (( $wifistrength <= -100 )) ; then
+    quality=0
+  elif (( $wifistrength >= -50 )) ; then
+    quality=100
+  else
+    quality=$(( 2*( $wifistrength+100 ) ))
+  fi
+fi
+
+#check if wired network exist and is up
+wirednetwork=`ip -br l | awk '$1 !~ "lo|vir|tun|tap|w" {print $1}'`
+if $(cat /sys/class/net/$wirednetwork/operstate | grep -q up); then
+  wired_is_up=True
+fi
+if [ $# -eq 0 ]; then
+  set -- "-i"
+fi
+
+while getopts ":tfi" arg; do
+
+  case "${arg}" in
+    t)
+      text="Net:"
+      if [[ -n $wired_is_up ]]; then
+         neticon="$text Wired"
+      elif [ "$wifi_is_connected" = true ] ; then
+         neticon="$text WiFi"
+      else
+        #wifi is not connected and wired net neither
+        neticon="$text None"
+      fi
+    ;;
+    f)
+      if [[ -n $wired_is_up ]]; then
+         neticon="󰈀"
+      elif [ "$wifi_is_connected" = true ] ; then
+      #assign icon
+        if (( $quality >= 80 )) ; then
+          neticon="󰣺"
+        elif (( $quality >= 60 )) ; then
+          neticon="󰣸"
+        elif (( $quality >= 40 )) ; then
+          neticon="󰣶"
+        elif (( $quality >= 20 )) ; then
+          neticon="󰣴"
+        else
+          neticon="󰣾"
+        fi
+      else
+        #wifi is not connected and wired net neither
+        neticon="󰈂"
+      fi
+    ;;
+    i)
+      if [[ -n $wired_is_up ]]; then
+        neticon="$iconpath/network-wired.svg"
+      elif [ "$wifi_is_connected" = true ] ; then
+      #assign icon
+        if (( $quality >= 80 )) ; then
+          neticon="$iconpath/network-wireless-signal-excellent.svg"
+        elif (( $quality >= 60 )) ; then
+          neticon="$iconpath/network-wireless-signal-good.svg"
+        elif (( $quality >= 40 )) ; then
+          neticon="$iconpath/network-wireless-signal-ok.svg"
+        elif (( $quality >= 20 )) ; then
+          neticon="$iconpath/network-wireless-signal-low.svg"
+        else
+          neticon="$iconpath/network-wireless-signal-none.svg"
+        fi
+      else
+        #wifi is not connected and wired net neither
+        neticon="$iconpath/network-wired-offline.svg"
+      fi
+    ;;
+    *)
+      die "Invalid option -"$OPTARG""
+    ;;
+  esac
+
+done
+
+echo $neticon
