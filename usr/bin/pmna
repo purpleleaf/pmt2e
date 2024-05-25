@@ -9,7 +9,7 @@ wifi_link=`iw dev wlan0 link 2> /dev/null`
 if  [ "$(iw dev wlan0 link 2> /dev/null)" != "Not connected." ]; then   
   wifi_is_connected=true
   wifi_name=$(iwgetid | awk -F '"' '{ print $2 }')
-  wifistrength=`iwctl station wlan0 show | awk '/dBm/ {print $2}'`
+  wifistrength=`iwctl station wlan0 show | awk '/RSSI/ {print $2}'`
   # convert signal to percentage quality
   # https://stackoverflow.com/questions/15797920/how-to-convert-wifi-signal-strength-from-quality-percent-to-rssi-dbm
   if (( $wifistrength <= -100 )) ; then
