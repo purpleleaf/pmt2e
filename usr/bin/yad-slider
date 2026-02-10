@@ -2,41 +2,118 @@
 
 # Set desired level with a yad dialog box
 
-# Dependencies: `alsa-utils`, `acpilight` or `light-git`, `yad`
+# Dependencies: `alsa-utils`, `acpilight` or `light`, `yad`
 # Arguments: [bri] | [vol]
 
-if [[ $1 == bri* ]]; then
+case "$1" in
+    bri*)
+        # --- 1. Detect hardware backlight ---
+        hw_backlight=$(
+            if [ -d /sys/class/backlight ]; then
+                for d in /sys/class/backlight/*; do
+                    if [ -f "$d/brightness" ] && [ -f "$d/max_brightness" ]; then
+                        echo "$d"
+                        break
+                    fi
+                done
+            fi
+        )
 
-    # Prefer the `light` package, use `xbacklight` if `light` not found
-    if [[ $(which light) == *"/light"* ]]; then
-        lvl=$(light -G)
-    else
-        lvl=$(xbacklight -get)
-    fi
-
-    lvl=$(echo ${lvl} | awk '{ printf"%0.0f\n", $1 }')
-
-    yad --scale --value ${lvl} --print-partial --mouse --no-buttons \
-    --undecorated --skip-taskbar --sticky --close-on-unfocus --height 400 --vertical --on-top --class="yad_slider" 2> /dev/null | \
-    while read BRI; do
-        if [[ $(which light) == *"/light"* ]]; then
-            light -S $BRI 2>&1 >/dev/null
-        else
-            xbacklight -set "$BRI" 2>&1 >/dev/null
+        # If no hardware backlight exists → warn user and stop
+        if [ -z "$hw_backlight" ]; then
+            yad --title="Backlight" \
+                --window-icon="weather-clear-symbolic" \
+                --image="weather-clear-symbolic" \
+                --text="This system does not provide a hardware backlight interface." \
+                --button=OK
+            exit 1
         fi
-    done &
 
-elif [[ $1 == vol* ]]; then
-    lvl=$(amixer sget Master | grep 'Mono:' | awk -F'[][]' '{ print $2 }')
-    lvl=${lvl::-1}
-    yad --scale --value ${lvl} --print-partial --mouse --no-buttons \
-    --undecorated --skip-taskbar --sticky --close-on-unfocus --height 400 --vertical --on-top --class="yad_slider" | \
-    while read VOL; do
-      amixer sset 'Master' "$VOL%" 2>&1 >/dev/null
-    done &
-else
-    echo "Allowed arguments: vol | bri"
-fi
+        # --- 2. Check backend: light or xbacklight/acpilight ---
+        if command -v light >/dev/null 2>&1; then
+            lvl=$(light -G 2>/dev/null)
+        elif command -v xbacklight >/dev/null 2>&1; then
+            lvl=$(xbacklight -get 2>/dev/null)
+        else
+            yad --title="Backlight" \
+                --window-icon="weather-clear-symbolic" \
+                --image="weather-clear-symbolic" \
+                --text="No software backend for controlling brightness was found.\n\
+Please install light, acpilight or xorg-backlight." \
+                --button=OK
+            exit 1
+        fi
 
+        lvl=$(printf '%0.0f\n' "$lvl")
 
+        yad --scale --value "$lvl" --print-partial --mouse --no-buttons \
+            --undecorated --skip-taskbar --sticky --close-on-unfocus \
+            --height 400 --vertical --on-top --class="yad_slider" 2>/dev/null |
+        while IFS= read -r BRI; do
+            if command -v light >/dev/null 2>&1; then
+                light -S "$BRI" >/dev/null 2>&1
+            else
+                xbacklight -set "$BRI" >/dev/null 2>&1
+            fi
+        done &
+    ;;
 
+    vol*)
+        # 1. Find the first control that actually has a % volume
+        ctl=$(
+            amixer scontrols |
+            while IFS= read -r ctl; do
+                case "$ctl" in
+                    *"'"*"'"*)
+                        name=$(printf '%s\n' "$ctl" | sed "s/.*'\(.*\)'.*/\1/")
+                        if amixer get "$name" | grep -q '%'; then
+                            printf '%s\n' "$name"
+                            break
+                        fi
+                        ;;
+                esac
+            done
+        )
+
+        # Security check: fallback if empty
+        # If no control was found, show a message and stop
+        if [ -z "$ctl" ]; then
+            yad --text="No volume control available on this device." \
+                --button=OK --center --on-top
+            exit 0
+        fi
+
+        # 2. Extract the numeric volume from that control
+        lvl=$(
+            amixer get "$ctl" |
+            while IFS= read -r line; do
+                case "$line" in
+                    *%*)
+                        set -- $(printf '%s\n' "$line" | tr '[]' '  ')
+                        for field in "$@"; do
+                            case "$field" in
+                                *%)
+                                    val=${field%%%}
+                                    printf '%s\n' "$val"
+                                    exit 0
+                                    ;;
+                            esac
+                        done
+                        ;;
+                esac
+            done
+        )
+
+        # 3. YAD slider controlling the detected control
+        yad --scale --value "$lvl" --print-partial --mouse --no-buttons \
+            --undecorated --skip-taskbar --sticky --close-on-unfocus \
+            --height 400 --vertical --on-top --class="yad_slider" |
+        while IFS= read -r VOL; do
+            amixer sset "$ctl" "$VOL%" >/dev/null 2>&1
+        done &
+    ;;
+
+    *)
+        echo "Allowed arguments: vol | bri"
+    ;;
+esac
