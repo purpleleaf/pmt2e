@@ -1,0 +1,373 @@
+#!/bin/sh
+
+# ---------------------------------------------------------
+# Check for dunstify availability
+# ---------------------------------------------------------
+if ! command -v dunstify >/dev/null 2>&1; then
+    yad --title="Notification Error" \
+        --center \
+        --width=400 \
+        --text="dunst not found.\nPlease install it to use this script." \
+        --button=OK:0
+    exit 1
+fi
+
+iconpath="/usr/share/pmt2e/icons"
+
+# ---------------------------------------------------------
+# OS detection
+# ---------------------------------------------------------
+detect_os() {
+    case "$(uname -s)" in
+        Linux)  os_family="linux" ;;
+        FreeBSD|OpenBSD|NetBSD) os_family="bsd" ;;
+        *)      os_family="unknown" ;;
+    esac
+}
+
+# ---------------------------------------------------------
+# RSSI → quality conversion
+# ---------------------------------------------------------
+calculate_quality() {
+    rssi="$1"
+
+    if [ -z "$rssi" ]; then
+        quality=""
+        return
+    fi
+
+    if [ "$rssi" -le -100 ]; then
+        quality=0
+    elif [ "$rssi" -ge -50 ]; then
+        quality=100
+    else
+        quality=$(( 2 * (rssi + 100) ))
+    fi
+}
+
+# ---------------------------------------------------------
+# NOTE ABOUT PARSING STYLE
+#
+# This script uses two different parsing approaches:
+#
+# 1) "while read … <<EOF" blocks
+#     Used when parsing multi‑line command output (iw, ifconfig, route).
+#     This preserves the exact line structure and avoids word‑splitting
+#     issues, which is important when fields may contain spaces or when
+#     formatting varies between systems.
+#
+# 2) "set -- $line"
+#     Used only when parsing lines whose fields are guaranteed to be
+#     single‑token (e.g., 'dev', 'via', 'src', interface names, IPs).
+#     These values never contain spaces on Linux/BSD, so positional
+#     splitting is safe and simpler.
+#
+# In short:
+#     - EOF loops for multi‑line or space‑sensitive data
+#     - set -- for simple, stable, single‑token fields
+#
+# This keeps the script robust without over‑engineering for hypothetical
+# future output changes.
+# ---------------------------------------------------------
+
+# ---------------------------------------------------------
+# LINUX NETWORK DETECTION
+#
+# Determines:
+#   - default interface
+#   - gateway
+#   - IPv4 address
+#   - Wi‑Fi vs Ethernet
+#   - Wi‑Fi details (SSID, RSSI, channel)
+#
+# Notes:
+#   • Uses "ip -4" to avoid IPv6 defaults interfering.
+#   • "set --" is safe because dev/via/src are single‑token.
+#   • Uses "iw" (modern, consistent) instead of deprecated iwconfig.
+#   • Multi‑line iw output parsed via EOF loops for safety.
+# ---------------------------------------------------------
+linux_detect() {
+
+    # IPv4-only route lookup:
+    # Some systems list IPv6 default routes first, which would confuse
+    # interface/gateway detection. Forcing IPv4 keeps behavior consistent.
+    route=$(ip -4 route show default | head -n1)
+
+    set -- $route
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            dev) default_iface=$2 ;;
+            via) gateway=$2 ;;
+            src) ip_addr=$2 ;;
+        esac
+        shift
+    done
+
+    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then
+        net_is_up=1
+    fi
+
+    # Fallback: extract src from per-interface route
+    if [ "$net_is_up" = 1 ] && [ -z "$ip_addr" ]; then
+        route_dev=$(ip -4 route show dev "$default_iface" | grep ^default | head -n1)
+
+        set -- $route_dev
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                src) ip_addr=$2 ;;
+            esac
+            shift
+        done
+    fi
+
+    # Wi‑Fi vs wired detection
+    if [ "$net_is_up" = 1 ]; then
+        if iw dev "$default_iface" info >/dev/null 2>&1; then
+            is_wifi=1
+        else
+            is_wired=1
+        fi
+    fi
+
+    # Wi‑Fi parsing
+    if [ "$is_wifi" = 1 ]; then
+
+        wifi_link=$(iw dev "$default_iface" link 2>/dev/null)
+
+        case "$wifi_link" in
+            *"SSID"*) : ;;
+            *) return ;;
+        esac
+
+        while IFS= read -r line; do
+            set -- $line
+            case "$1" in
+                SSID:)   SSID=${line#*SSID: } ;;
+                freq:)   freq=$2 ;;
+                signal:) signal=$2 ;;
+            esac
+        done <<EOF
+$wifi_link
+EOF
+
+        wifi_name=$SSID
+        wifistrength=$signal
+
+        calculate_quality "$wifistrength"
+
+        wifi_info=$(iw dev "$default_iface" info 2>/dev/null)
+
+        while IFS= read -r line; do
+            set -- $line
+            case "$1" in
+                channel|channel:|Channel|Channel:) channel=$2 ;;
+            esac
+        done <<EOF
+$wifi_info
+EOF
+    fi
+}
+
+# ---------------------------------------------------------
+# BSD NETWORK DETECTION
+#
+# Determines:
+#   - default interface
+#   - gateway
+#   - IPv4 address
+#   - Wi‑Fi vs Ethernet
+#   - Wi‑Fi details (SSID, RSSI)
+#
+# Notes:
+#   • Uses "route -n get default" (BSD standard).
+#   • PF may block routing socket; empty output = network down.
+#   • ifconfig output varies across BSDs; match multiple patterns.
+#   • BSD may quote SSIDs; we keep them as-is (cosmetic only).
+#   • Multi‑line ifconfig parsed via EOF loops for safety.
+# ---------------------------------------------------------
+bsd_detect() {
+
+    route=$(route -n get default 2>/dev/null) || route=
+
+    if [ -n "$route" ]; then
+        while IFS= read -r line; do
+            set -- $line
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    gateway:)   gateway=$2 ;;
+                    interface:) default_iface=$2 ;;
+                    address:)   ip_addr=$2 ;;
+                esac
+                shift
+            done
+        done <<EOF
+$route
+EOF
+    fi
+
+    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then
+        net_is_up=1
+    fi
+
+    # BSD route fallback:
+    # If PF blocks routing socket access, route output may be incomplete.
+    if [ "$net_is_up" = 1 ] && [ -z "$ip_addr" ]; then
+        route_dev=$(route -n get default 2>/dev/null | grep 'address:' | head -n1)
+
+        set -- $route_dev
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                address:) ip_addr=$2 ;;
+            esac
+            shift
+        done
+    fi
+
+    case "$default_iface" in
+        wlan*|ath*|iwm*|iwl*|wpi*|rtwn*|ral*|rum*|urtwn*) is_wifi=1 ;;
+        *)                                                is_wired=1 ;;
+    esac
+
+    if [ "$is_wifi" = 1 ]; then
+        wifi_raw=$(ifconfig "$default_iface" 2>/dev/null)
+
+        while IFS= read -r line; do
+            case "$line" in
+                *SSID:*)        wifi_name=${line#*SSID: } ;;
+                *ssid:*)        wifi_name=${line#*ssid: } ;;
+                *ssid\ *)       wifi_name=${line#*ssid } ;;
+                *signal:*)      set -- $line; wifistrength=$2 ;;
+                *signal\ *)     set -- $line; wifistrength=$2 ;;
+            esac
+        done <<EOF
+$wifi_raw
+EOF
+
+        calculate_quality "$wifistrength"
+    fi
+}
+
+# ---------------------------------------------------------
+# Helper: print IP/Gateway/DNS block
+# ---------------------------------------------------------
+# ---------------------------------------------------------
+# Helper: print_netinfo
+#
+# This small function prints IP, gateway, and DNS in a unified
+# format. It relies on global variables (ip_addr, gateway, dns),
+# which is intentional: shell functions cannot easily return
+# multiple values, and duplicating these three lines in every
+# network-type block would make the script harder to maintain.
+#
+# The ${var:-none} fallback ensures the output is always complete
+# even if some fields are missing (e.g., restricted routing socket,
+# missing resolv.conf, or partial interface data).
+# ---------------------------------------------------------
+
+print_netinfo() {
+    echo "IP: ${ip_addr:-none}"
+    echo "Gateway: ${gateway:-none}"
+    echo "DNS: ${dns:-none}"
+}
+
+# ---------------------------------------------------------
+# Run detection
+# ---------------------------------------------------------
+detect_os
+
+case "$os_family" in
+    linux) linux_detect ;;
+    bsd)   bsd_detect ;;
+esac
+
+# ---------------------------------------------------------
+# EARLY EXIT: network down
+# ---------------------------------------------------------
+if [ -z "$net_is_up" ]; then
+    dunstify -i "network-offline" "No network"
+    exit 0
+fi
+
+# ---------------------------------------------------------
+# DNS parsing:
+# Avoid awk because BusyBox awk is inconsistent. This POSIX loop
+# extracts the first nameserver, matching resolver behavior.
+# ---------------------------------------------------------
+dns=
+while IFS= read -r line; do
+    case "$line" in
+        nameserver\ *)
+            set -- $line
+            dns=$2
+            break
+            ;;
+    esac
+done 2>/dev/null < /etc/resolv.conf
+
+# ---------------------------------------------------------
+# Build formatted message
+# ---------------------------------------------------------
+
+# Base header
+formatted_msg="Interface: $default_iface
+"
+
+# Type selection
+if [ "$is_wifi" = 1 ]; then
+    formatted_msg="$formatted_msg""Type: WiFi
+"
+elif [ "$is_wired" = 1 ]; then
+    formatted_msg="$formatted_msg""Type: Ethernet
+"
+else
+    formatted_msg="$formatted_msg""Type: Unknown
+"
+fi
+
+# Wi‑Fi‑specific fields
+if [ "$is_wifi" = 1 ]; then
+    formatted_msg="$formatted_msg
+SSID: ${wifi_name:-n/a}
+RSSI: ${wifistrength:-n/a}
+Quality: ${quality:-n/a}%
+Channel: ${channel:-n/a}
+"
+fi
+
+# Network info footer
+formatted_msg="$formatted_msg
+
+$(print_netinfo)
+"
+
+# ---------------------------------------------------------
+# Icon selection:
+# We do not check for icon file existence because dunstify resolves
+# icon names through the theme search path (Papirus, etc.).
+# ---------------------------------------------------------
+if [ "$is_wired" = 1 ]; then
+    icon="network-wired"
+elif [ "$is_wifi" = 1 ]; then
+    if [ "$quality" -ge 80 ] 2>/dev/null; then
+        icon="network-wireless-signal-excellent"
+    elif [ "$quality" -ge 60 ] 2>/dev/null; then
+        icon="network-wireless-signal-good"
+    elif [ "$quality" -ge 40 ] 2>/dev/null; then
+        icon="network-wireless-signal-ok"
+    elif [ "$quality" -ge 20 ] 2>/dev/null; then
+        icon="network-wireless-signal-low"
+    else
+        icon="network-wireless-signal-none"
+    fi
+fi
+
+icon="$iconpath/$icon.svg"
+
+# ---------------------------------------------------------
+# Notification
+# ---------------------------------------------------------
+dunstify \
+    -i "$icon" \
+    -h string:x-dunst-stack-tag:netinfo \
+    "Network Details" \
+    "$formatted_msg"
