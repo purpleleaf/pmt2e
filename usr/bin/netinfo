@@ -88,9 +88,6 @@ calculate_quality() {
 # ---------------------------------------------------------
 linux_detect() {
 
-    # IPv4-only route lookup:
-    # Some systems list IPv6 default routes first, which would confuse
-    # interface/gateway detection. Forcing IPv4 keeps behavior consistent.
     route=$(ip -4 route show default | head -n1)
 
     set -- $route
@@ -133,11 +130,6 @@ linux_detect() {
     if [ "$is_wifi" = 1 ]; then
 
         wifi_link=$(iw dev "$default_iface" link 2>/dev/null)
-
-        case "$wifi_link" in
-            *"SSID"*) : ;;
-            *) return ;;
-        esac
 
         while IFS= read -r line; do
             set -- $line
@@ -233,11 +225,11 @@ EOF
 
         while IFS= read -r line; do
             case "$line" in
-                *SSID:*)        wifi_name=${line#*SSID: } ;;
-                *ssid:*)        wifi_name=${line#*ssid: } ;;
-                *ssid\ *)       wifi_name=${line#*ssid } ;;
-                *signal:*)      set -- $line; wifistrength=$2 ;;
-                *signal\ *)     set -- $line; wifistrength=$2 ;;
+                *SSID:*)    wifi_name=${line#*SSID: } ;;
+                *ssid:*)    wifi_name=${line#*ssid: } ;;
+                *ssid\ *)   wifi_name=${line#*ssid } ;;
+                *signal:*)  set -- "$line"; wifistrength=$2 ;;
+                *signal\ *) set -- "$line"; wifistrength=$2 ;;
             esac
         done <<EOF
 $wifi_raw
@@ -336,7 +328,6 @@ fi
 
 # Network info footer
 formatted_msg="$formatted_msg
-
 $(print_netinfo)
 "
 
