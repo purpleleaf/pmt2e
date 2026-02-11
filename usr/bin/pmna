@@ -1,96 +1,196 @@
-#!/bin/bash
+#!/bin/sh
 
-#set variables
-#network icons path
 iconpath="/usr/share/pmt2e/icons"
 
-#check if a wifi net exist
-wifi_link=`iw dev wlan0 link 2> /dev/null`
-if  [ "$(iw dev wlan0 link 2> /dev/null)" != "Not connected." ]; then   
-  wifi_is_connected=true
-  wifi_name=$(iwgetid | awk -F '"' '{ print $2 }')
-  wifistrength=`iwctl station wlan0 show | awk '/RSSI/ {print $2}'`
-  # convert signal to percentage quality
-  # https://stackoverflow.com/questions/15797920/how-to-convert-wifi-signal-strength-from-quality-percent-to-rssi-dbm
-  if (( $wifistrength <= -100 )) ; then
-    quality=0
-  elif (( $wifistrength >= -50 )) ; then
-    quality=100
-  else
-    quality=$(( 2*( $wifistrength+100 ) ))
-  fi
-fi
+# ---------------------------------------------------------
+# Error handling
+# ---------------------------------------------------------
 
-#check if wired network exist and is up
-wirednetwork=`ip -br l | awk '$1 !~ "lo|vir|tun|tap|w" {print $1}'`
-if $(cat /sys/class/net/$wirednetwork/operstate | grep -q up); then
-  wired_is_up=True
-fi
-if [ $# -eq 0 ]; then
-  set -- "-i"
-fi
+show_error() {
+    msg="$1"
+    if command -v yad >/dev/null 2>&1; then
+        yad --form --field="$msg:LBL" \
+            --title="Network Error" \
+            --window-icon="network-error" \
+            --width="500" --center
+    else
+        printf '%s\n' "$msg" 1>&2
+    fi
+}
 
-while getopts ":tfi" arg; do
+die() {
+    show_error "$1"
+    exit 1
+}
 
-  case "${arg}" in
-    t)
-      text="Net:"
-      if [[ -n $wired_is_up ]]; then
-         neticon="$text Wired"
-      elif [ "$wifi_is_connected" = true ] ; then
-         neticon="$text WiFi"
-      else
-        #wifi is not connected and wired net neither
-        neticon="$text None"
-      fi
-    ;;
-    f)
-      if [[ -n $wired_is_up ]]; then
-         neticon="󰈀"
-      elif [ "$wifi_is_connected" = true ] ; then
-      #assign icon
-        if (( $quality >= 80 )) ; then
-          neticon="󰣺"
-        elif (( $quality >= 60 )) ; then
-          neticon="󰣸"
-        elif (( $quality >= 40 )) ; then
-          neticon="󰣶"
-        elif (( $quality >= 20 )) ; then
-          neticon="󰣴"
+# ---------------------------------------------------------
+# OS detection (Linux vs BSD)
+# ---------------------------------------------------------
+
+detect_os() {
+    case "$(uname -s)" in
+        Linux)  os_family="linux" ;;
+        FreeBSD|OpenBSD|NetBSD) os_family="bsd" ;;
+        *)      os_family="unknown" ;;
+    esac
+}
+
+# ---------------------------------------------------------
+# RSSI → quality conversion
+# ---------------------------------------------------------
+calculate_quality() {
+    rssi="$1"
+    if [ -z "$rssi" ]; then
+        quality=""
+        return
+    fi
+    if [ "$rssi" -le -100 ]; then
+        quality=0
+    elif [ "$rssi" -ge -50 ]; then
+        quality=100
+    else
+        quality=$(( 2 * (rssi + 100) ))
+    fi
+}
+
+# ---------------------------------------------------------
+# Network data collection (Linux and BSD)
+# ---------------------------------------------------------
+
+linux_detect() {
+    route=$(ip -4 route show default | head -n1)
+    set -- $route
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            dev) default_iface=$2 ;;
+            via) gateway=$2 ;;
+        esac
+        shift
+    done
+    # If we have a gateway and a default route there must be an active network
+    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then
+        net_is_up=1
+    fi
+    # Wi‑Fi vs wired detection
+    if [ "$net_is_up" = 1 ]; then
+        if iw dev "$default_iface" info >/dev/null 2>&1; then
+            is_wifi=1
         else
-          neticon="󰣾"
+            is_wired=1
         fi
-      else
-        #wifi is not connected and wired net neither
-        neticon="󰈂"
-      fi
-    ;;
-    i)
-      if [[ -n $wired_is_up ]]; then
-        neticon="$iconpath/network-wired.svg"
-      elif [ "$wifi_is_connected" = true ] ; then
-      #assign icon
-        if (( $quality >= 80 )) ; then
-          neticon="$iconpath/network-wireless-signal-excellent.svg"
-        elif (( $quality >= 60 )) ; then
-          neticon="$iconpath/network-wireless-signal-good.svg"
-        elif (( $quality >= 40 )) ; then
-          neticon="$iconpath/network-wireless-signal-ok.svg"
-        elif (( $quality >= 20 )) ; then
-          neticon="$iconpath/network-wireless-signal-low.svg"
-        else
-          neticon="$iconpath/network-wireless-signal-none.svg"
-        fi
-      else
-        #wifi is not connected and wired net neither
-        neticon="$iconpath/network-wired-offline.svg"
-      fi
-    ;;
-    *)
-      die "Invalid option -"$OPTARG""
-    ;;
-  esac
+    fi
+    # Wi‑Fi parsing
+    if [ "$is_wifi" = 1 ]; then
+        signal=$(iw dev "$default_iface" link | grep 'signal:' | cut -d' ' -f2)
+        calculate_quality "$signal"
+    fi
+}
 
+
+bsd_detect() {
+
+    # Detect default interface
+    default_iface=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exit}')
+    # Check if interface is up
+    if [ -n "$default_iface" ]; then
+        if ifconfig "$default_iface" 2>/dev/null | grep -q "status: active"; then
+            net_is_up=1
+        fi
+    fi
+    # Detect WiFi vs wired
+    if [ "$net_is_up" = 1 ]; then
+        case "$default_iface" in
+            wlan*|ath*|iwm*|iwl*|wpi*|rtwn*|ral*|rum*|urtwn*)
+                is_wifi=1
+            ;;
+            *)
+                is_wired=1
+            ;;
+        esac
+    fi
+    # WiFi details
+        wifi_raw=$(ifconfig "$default_iface" 2>/dev/null)
+        while IFS= read -r line; do
+            case "$line" in
+                *signal:*)  set -- "$line"; wifistrength=$2 ;;
+            esac
+        done <<EOF
+$wifi_raw
+EOF
+    calculate_quality "$signal"
+}
+
+detect_os
+
+# OS‑specific network logic
+if [ "$os_family" = "linux" ]; then
+    linux_detect
+elif [ "$os_family" = "bsd" ]; then
+    bsd_detect
+fi
+
+# Default option if none provided
+[ $# -eq 0 ] && set -- "-i"
+
+# Argument parsing
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -t)
+            text="Net:"
+            if [ "$is_wired" = 1 ]; then
+                neticon="$text Wired"
+            elif [ "$is_wifi" = 1 ]; then
+                neticon="$text WiFi"
+            else
+                neticon="$text None"
+            fi
+            shift
+        ;;
+        -f)
+            if [ "$is_wired" = 1 ]; then
+                neticon="󰈀"
+            elif [ "$is_wifi" = 1 ] && [ -n "$quality" ]; then
+                if   [ "$quality" -ge 80 ]; then neticon="󰤨"
+                elif [ "$quality" -ge 60 ]; then neticon="󰤥"
+                elif [ "$quality" -ge 40 ]; then neticon="󰤢"
+                elif [ "$quality" -ge 20 ]; then neticon="󰤟"
+                else neticon="󰤯"
+                fi
+            elif [ "$is_wifi" = 1 ]; then
+                neticon="󰤯"
+            else
+                neticon=""
+            fi
+            shift
+        ;;
+        -i)
+            if [ "$is_wired" = 1 ]; then
+                neticon="$iconpath/network-wired.svg"
+            elif [ "$is_wifi" = 1 ] && [ -n "$quality" ]; then
+                if   [ "$quality" -ge 80 ]; then neticon="$iconpath/network-wireless-signal-excellent.svg"
+                elif [ "$quality" -ge 60 ]; then neticon="$iconpath/network-wireless-signal-good.svg"
+                elif [ "$quality" -ge 40 ]; then neticon="$iconpath/network-wireless-signal-ok.svg"
+                elif [ "$quality" -ge 20 ]; then neticon="$iconpath/network-wireless-signal-low.svg"
+                else neticon="$iconpath/network-wireless-signal-none.svg"
+                fi
+            elif [ "$is_wifi" = 1 ]; then
+                neticon="$iconpath/network-wireless-signal-none.svg"
+            else
+                neticon="$iconpath/network-wired-offline.svg"
+            fi
+            shift
+        ;;
+        --)
+            shift
+            break
+        ;;
+        -*)
+            die "Invalid option $1"
+        ;;
+        *)
+            shift
+        ;;
+    esac
 done
 
-echo $neticon
+printf '%s\n' "${neticon:-}"
