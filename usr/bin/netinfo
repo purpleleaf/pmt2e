@@ -134,19 +134,14 @@ linux_detect() {
         while IFS= read -r line; do
             set -- $line
             case "$1" in
-                SSID:)   SSID=${line#*SSID: } ;;
-                freq:)   freq=$2 ;;
+                SSID:)   wifi_name=${line#*SSID: } ;;
                 signal:) signal=$2 ;;
             esac
         done <<EOF
 $wifi_link
 EOF
 
-        wifi_name=$SSID
-        wifistrength=$signal
-
-        calculate_quality "$wifistrength"
-
+        calculate_quality "$signal"
         wifi_info=$(iw dev "$default_iface" info 2>/dev/null)
 
         while IFS= read -r line; do
@@ -222,20 +217,18 @@ EOF
 
     if [ "$is_wifi" = 1 ]; then
         wifi_raw=$(ifconfig "$default_iface" 2>/dev/null)
-
         while IFS= read -r line; do
             case "$line" in
                 *SSID:*)    wifi_name=${line#*SSID: } ;;
                 *ssid:*)    wifi_name=${line#*ssid: } ;;
                 *ssid\ *)   wifi_name=${line#*ssid } ;;
-                *signal:*)  set -- "$line"; wifistrength=$2 ;;
-                *signal\ *) set -- "$line"; wifistrength=$2 ;;
+                *signal:*)  set -- "$line"; signal=$2 ;;
+                *signal\ *) set -- "$line"; signal=$2 ;;
             esac
         done <<EOF
 $wifi_raw
 EOF
-
-        calculate_quality "$wifistrength"
+        calculate_quality "$signal"
     fi
 }
 
@@ -320,7 +313,7 @@ fi
 if [ "$is_wifi" = 1 ]; then
     formatted_msg="$formatted_msg
 SSID: ${wifi_name:-n/a}
-RSSI: ${wifistrength:-n/a}
+RSSI: ${signal:-n/a}
 Quality: ${quality:-n/a}%
 Channel: ${channel:-n/a}
 "
