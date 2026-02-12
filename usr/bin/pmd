@@ -1,87 +1,135 @@
-#!/bin/bash
+#!/bin/sh
 
-# Dependencies xdotool wmctrl createjgmenu (for desktops menu)
+# Dependencies: xdotool wmctrl createjgmenu (for desktops menu)
+# POSIX-compliant. Symlink this script to 'pmd' if you want menu entries to call 'pmd'.
 
-declare -a menu_args
-
-scriptname=`basename $0`
+scriptname=$(basename "$0")
 action=""
 output=""
+outflag=""
+output_only=0
 
-die() { echo "$*" 1>&2 ; exit 1; }
-help_error_action="Only one action can be chosen between -h -n -p -m -w"
-help_error_output="Only one action can be chosen between -i -f -t -x"
+die() {
+  echo "$*" 1>&2
+  exit 1
+}
 
+show_help() {
+  cat <<EOF
+Usage: $scriptname [action] [output] [args...]
+
+Actions (choose one):
+  -h          show this help
+  -n          next desktop
+  -p          previous desktop
+  -m          show desktop menu
+  -r          show "move windows to" menu
+  -w <src> <dst>
+              move windows from <src> to <dst> (both zero-based)
+
+Output mode:
+  -o          indicate the script should print an output (requires -i|-f|-t)
+  -i          icon output
+  -f          glyph (font) output
+  -t          text output
+
+Rules:
+  - Only one action may be chosen (except -o which only requests output).
+  - When -o is used, an output option (-i|-f|-t) is required.
+  - When an action (other than -h) is chosen, an output option is required unless you only want the action to run.
+EOF
+}
+
+help_error_action="Only one action can be chosen between -h -n -p -m -r -w"
+help_error_output="Only one output can be chosen between -i -f -t"
+
+# Parse options and set outflag at the same time
 while getopts ":hnopmrwift" opt; do
-  case ${opt} in
-# allow only one action between help, set, up, down, toggle
+  case "$opt" in
     h)
-      [ -n "$action" ] && die "${help_error_action}"
+      [ -n "$action" ] && die "$help_error_action"
       action="help"
-	  output="help"
+      output="help"
       ;;
     n)
-      [ -n "$action" ] && die "${help_error_action}"
+      [ -n "$action" ] && die "$help_error_action"
       action="next"
       ;;
     p)
-      [ -n "$action" ] && die "${help_error_action}"
+      [ -n "$action" ] && die "$help_error_action"
       action="previous"
       ;;
-    o)
-      [ -n "$action" ] && die "${help_error_action}"
-      action="output"
-      ;;
     m)
-      [ -n "$action" ] && die "${help_error_action}"
+      [ -n "$action" ] && die "$help_error_action"
       action="menu"
       ;;
     r)
-      [ -n "$action" ] && die "${help_error_action}"
+      [ -n "$action" ] && die "$help_error_action"
       action="right_menu"
       ;;
     w)
-      [ -n "$action" ] && die "${help_error_action}"
+      [ -n "$action" ] && die "$help_error_action"
       action="windows"
-      output="windows"
+      # -w takes two positional args; leave them after shift
       ;;
-# allow only one option between icon, text or font glyph
+    o)
+      output_only=1
+      ;;
     i)
-      [ -n "$output" ] && die "${help_error_action}"
+      [ -n "$output" ] && die "$help_error_output"
       output="icon"
+      outflag='-i'
       ;;
     f)
-      [ -n "$output" ] && die "${help_error_action}"
+      [ -n "$output" ] && die "$help_error_output"
       output="glyph"
+      outflag='-f'
       ;;
     t)
-      [ -n "$output" ] && die "${help_error_action}"
+      [ -n "$output" ] && die "$help_error_output"
       output="text"
+      outflag='-t'
       ;;
-# require an argument for -s option 
     :)
-      die "Option -"$OPTARG" requires an argument"
+      die "Option -$OPTARG requires an argument"
       ;;
-    *)
-      die "Invalid option -"$OPTARG""
+    \?)
+      die "Invalid option -$OPTARG"
       ;;
   esac
 done
 
-shift $((OPTIND-1))
+shift $((OPTIND - 1))
 
-# exit if $action and/or $output are not set
-if [[ ! -n "$action" ]] || [[ ! -n "$output" ]]; then
-die "$scriptname requires both an action [-h | -n | -p | -m] and an output [-i | -f | -t] option. \
-Please run \"$scriptname -h\" for usage."
+# Default outflag if none provided (so menu entries can reuse it)
+if [ -z "$outflag" ]; then
+  outflag='-t'   # default to text output
 fi
 
-curr_desktop=$(xdotool get_desktop)
+# Validate option combinations
+if [ -z "$action" ] && [ "$output_only" -eq 0 ]; then
+  die "$scriptname requires an action (e.g. -n -p -m -r -w) or -o to request output-only. Run \"$scriptname -h\" for usage."
+fi
 
-case ${action} in
+if [ "$output_only" -eq 1 ] && [ -z "$output" ]; then
+  die "When using -o you must choose an output with -i, -f, or -t."
+fi
+
+# If an action (other than help) is chosen and no output specified, require output
+if [ -n "$action" ] && [ "$action" != "help" ] && [ -z "$output" ] && [ "$output_only" -eq 0 ]; then
+  die "$scriptname requires an output (-i | -f | -t) when an action is chosen. Run \"$scriptname -h\" for usage."
+fi
+
+# Get current desktop (zero-based)
+curr_desktop=$(xdotool get_desktop 2>/dev/null)
+if [ -z "$curr_desktop" ]; then
+  die "xdotool failed to get current desktop"
+fi
+
+case "$action" in
   help)
     show_help
-    exit
+    exit 0
     ;;
   next)
     xdotool set_desktop --relative 1
@@ -90,48 +138,117 @@ case ${action} in
     xdotool set_desktop --relative -- -1
     ;;
   menu)
-    desktop_num=$(xdotool get_num_desktops)
-    for (( i=1; i <= $desktop_num; i++ )); do
-      menu_args+=("Desktop $i,xdotool set_desktop $(($i-1)) ")
+    desktop_num=$(xdotool get_num_desktops 2>/dev/null)
+    [ -n "$desktop_num" ] || die "xdotool failed to get number of desktops"
+
+    set --
+    i=1
+    while [ "$i" -le "$desktop_num" ]; do
+      target=$((i - 1))
+      set -- "$@" "Desktop $i,xdotool set_desktop $target"
+      i=$((i + 1))
     done
-    createjgmenu "^sep(Move to:)" "${menu_args[@]}"
+
+    createjgmenu "^sep(Move to:)" "$@"
     ;;
   right_menu)
-    desktop_num=$(xdotool get_num_desktops)
-    windows=$(wmctrl -l | awk -v var=$curr_desktop '{if ($2 == var) print $0;}' | cut -d' ' -f1)
-    if [[ -n ${windows} ]]; then
-      for (( i=1; i <= $desktop_num; i++ )); do
-        if [ $(($i-1)) -eq ${curr_desktop} ]; then
+    desktop_num=$(xdotool get_num_desktops 2>/dev/null)
+    [ -n "$desktop_num" ] || die "xdotool failed to get number of desktops"
+
+    # Resolve absolute script path for menu invocation
+    case "$0" in
+      /*) script_cmd="$0" ;;
+      *)  script_cmd="$PWD/$0" ;;
+    esac
+
+    # Check if there are windows on the current desktop
+    windows_exist=$(wmctrl -l | awk -v var="$curr_desktop" '$2 == var { print $1; exit }')
+
+    if [ -n "$windows_exist" ]; then
+      set --
+      i=1
+      while [ "$i" -le "$desktop_num" ]; do
+        target=$((i - 1))
+        if [ "$target" -eq "$curr_desktop" ]; then
+          i=$((i + 1))
           continue
         fi
-        menu_args+=("Desktop $i, pmd -w ${curr_desktop} $(($i-1)) ")
+
+        # Place the output option before the positional src/dst args so getopts parses it.
+        # Example command that will be stored in the menu: sh -c '/full/path/pmd -w -t 0 1'
+        cmd="sh -c '$script_cmd -w $outflag $curr_desktop $target'"
+
+        set -- "$@" "Desktop $i,$cmd"
+        i=$((i + 1))
       done
-      createjgmenu "^sep(Move Windows to:)" "${menu_args[@]}"
+
+      createjgmenu "^sep(Move Windows to:)" "$@"
     else
       createjgmenu "^sep(No window to move)"
     fi
     ;;
   windows)
-    windows=$(wmctrl -l | awk -v var=$1 '{if ($2 == var) print $0;}' | cut -d' ' -f1)
-    for window in $windows; do
-      xdotool set_desktop_for_window $window $2
-      xdotool set_desktop $2
+    # When invoked as: script -w <src> <dst>
+    src="$1"
+    dst="$2"
+    if [ -z "$src" ] || [ -z "$dst" ]; then
+      die "windows action requires two arguments: <source_desktop> <target_desktop>"
+    fi
+
+    # Read wmctrl output line-by-line, split into fields with the shell,
+    # and move windows whose desktop field equals $src.
+    wmctrl -l | while IFS= read -r line; do
+      # split line into positional parameters: $1 = winid, $2 = desktop, rest = title...
+      set -- $line
+      winid=$1
+      desk=$2
+
+      [ -n "$winid" ] || continue
+
+      if [ "$desk" = "$src" ]; then
+        if command -v xdotool >/dev/null 2>&1; then
+          xdotool set_desktop_for_window "$winid" "$dst"
+        else
+          wmctrl -i -r "$winid" -t "$dst"
+        fi
+      fi
     done
+
+    # switch to destination desktop (prefer xdotool, fallback to wmctrl)
+    if command -v xdotool >/dev/null 2>&1; then
+      xdotool set_desktop "$dst"
+    else
+      wmctrl -s "$dst"
+    fi
+
     exit 0
     ;;
-esac
-
-curr_desktop=$(( $(xdotool get_desktop)+1 ))
-
-case $output in
-  glyph)
-    echo "󰍺 <span font-size=\"xx-small\">${curr_desktop}</span>"
+  "")
+    # no action chosen (possible when -o used); fall through to output printing
     ;;
-  text)
-    echo "Desk: ${curr_desktop}"
-    ;;
-  icon)
-    echo "/usr/share/pmt2e/icons/desktop.svg"
-    echo ${curr_desktop}
+  *)
+    die "Unknown action: $action"
     ;;
 esac
+
+# Print output if requested (either via -o or because an action required output)
+if [ -n "$output" ]; then
+  # convert to 1-based desktop number for display
+  curr_display=$(( $(xdotool get_desktop) + 1 ))
+  case "$output" in
+    glyph)
+      printf '󰍺 <span font-size="xx-small">%s</span>\n' "$curr_display"
+      ;;
+    text)
+      printf 'Desk: %s\n' "$curr_display"
+      ;;
+    icon)
+      printf '/usr/share/pmt2e/icons/desktop.svg\n%s\n' "$curr_display"
+      ;;
+    *)
+      die "Unknown output: $output"
+      ;;
+  esac
+fi
+
+exit 0
