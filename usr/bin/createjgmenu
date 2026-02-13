@@ -1,79 +1,128 @@
-#!/bin/bash
+#!/bin/sh
 # Author: purpleleaf <max at ganoia dot eu>
+# POSIX sh compatible utility to create jgmenus
 
-# A utility to create jgmenus.
-
-function create_jgmenu () {
-
-declare -a menu_array
-
-show_help () {
-  printf -- "\n"
-  printf -- "Usage: $0 -c config_file | -m menu_file | -h | list of command to feed jgmenu\n"
-  printf -- "\n"
-  printf -- "  -h Show this help message and exit.\n"
-  printf -- "  -c config_file, use config_file to set jgmenu configuration.\n"
-  printf -- "  -m menu_file, use menu_file to fill jgmenu.\n\n"
-  printf -- "If -m is provided any other eventual argument passed to build the menu will be ignored.\n"
-  printf -- "Menu items must be passed in the form \"Menu name,/command/to/execute\".\n"
-  printf -- "\n"
-	exit 0	
+fatal() {
+    printf '%s\n' "$1" >&2
+    exit "${2:-1}"
 }
 
+show_help() {
+    printf '\n'
+    printf '%s\n' "Usage: $0 -c config_file | -m menu_file | -h | list of command to feed jgmenu"
+    printf '\n'
+    printf '%s\n' '  -h Show this help message and exit.'
+    printf '%s\n' '  -c config_file, use config_file to set jgmenu configuration.'
+    printf '%s\n' '  -m menu_file, use menu_file to fill jgmenu.'
+    printf '\n'
+    printf '%s\n' 'If -m is provided any other eventual argument passed to build the menu will be ignored.'
+    printf '%s\n' 'If no -m flag is provided menu can be build in the form "Menu name,/command/to/execute".'
+    printf '\n'
+    exit 0
+}
+
+menu_items=""
+maintain_config=false
+maintain_menu=false
+config_file=""
+menu_file=""
+
+# Parse options
 while [ "$#" -gt 0 ]; do
-  case "$1" in
-	-h|--help)
-      show_help
-      ;;
-    -c|--config)
-      config_file="$2"
-	  mantain_config=true
-      shift 2
-      ;;
-    -m|--menu)
-      menu_file="$2"
-	  mantain_menu=true
-      shift 2
-      ;;
-    *)
-      if ! [[ $menu_file ]]; then 
-        menu_array+=("$1")
-	    shift 1
-      fi
-      ;;
-  esac
+    case "$1" in
+        -h|--help)
+            show_help
+            ;;
+        -c|--config)
+            if [ -z "$2" ]; then
+                fatal 'fatal: option -c requires an argument' 2
+            fi
+            config_file="$2"
+            maintain_config=true
+            shift 2
+            ;;
+        -m|--menu)
+            if [ -z "$2" ]; then
+                fatal 'fatal: option -m requires an argument' 2
+            fi
+            menu_file="$2"
+            shift 2
+            ;;
+        *)
+            if [ -z "$menu_file" ]; then
+                if [ -z "$menu_items" ]; then
+                    menu_items="$1"
+                else
+                    menu_items="${menu_items}
+$1"
+                fi
+            fi
+            shift 1
+            ;;
+    esac
 done
 
-if [ ! -f "${config_file}" ]; then
-	config_file=$(mktemp -t jgmenu-config.XXXXXXXXXX)
+# Expand leading ~/ to $HOME (optional)
+case $menu_file in
+    ~/*) menu_file="$HOME/${menu_file#~/}" ;;
+esac
 
-	cat <<'EOF' >${config_file}
-	stay_alive          = 0
-	tint2_look          = 1
-	position_mode		= ipc
-	menu_width          = 40
-	menu_border         = 1
-	item_height         = 20
-	font                = Sans 10
-	icon_size           = 0
+# If menu_file is provided it must be a regular readable non-empty file.
+if [ -n "$menu_file" ] && [ -f "$menu_file" ] && [ -r "$menu_file" ] && [ -s "$menu_file" ]; then
+    maintain_menu=true
+elif [ -n "$menu_file" ]; then
+    fatal "fatal: menu file \"$menu_file\" does not exist or is not readable."
+fi
+
+# Create config file if not provided
+if [ -z "$config_file" ]; then
+    config_file=$(mktemp /tmp/jgmenu-config.XXXXXXXXXX) || fatal 'fatal: mktemp failed or is not available'
+    : > "${config_file}"
+    cat <<'EOF' >"${config_file}"
+stay_alive          = 0
+tint2_look          = 1
+position_mode       = ipc
+menu_width          = 40
+menu_border         = 1
+item_height         = 20
+font                = Sans 10
+icon_size           = 0
 EOF
+else
+    # If user provided a config file path, ensure it exists and is readable
+    case $config_file in
+        ~/*) config_file="$HOME/${config_file#~/}" ;;
+    esac
+    if [ ! -f "$config_file" ] || [ ! -r "$config_file" ]; then
+        fatal "fatal: config file \"$config_file\" does not exist or is not readable"
+    fi
+    maintain_config=true
 fi
 
-if [ ! -f "${menu_file}" ]; then
-	menu_file=$(mktemp -t jgmenu-menu.XXXXXXXXXX)
-	IFS=$'\n'
-	for i in ${menu_array[@]}; do echo $i >> ${menu_file}; done 
+# If no menu_file was provided, create one from positional menu_items
+if [ -z "$menu_file" ]; then
+    menu_file=$(mktemp /tmp/jgmenu-menu.XXXXXXXXXX) || fatal 'fatal: mktemp failed or is not available'
+    : > "${menu_file}"
+    if [ -n "${menu_items}" ]; then
+        printf '%s\n' "${menu_items}" >> "${menu_file}"
+    fi
+    maintain_menu=false
 fi
 
-jgmenu --config-file=${config_file} --csv-file=${menu_file}
-
-if ! [[ $mantain_menu ]]; then
-rm -f ${menu_file}
-fi
-if ! [[ $mantain_config ]]; then
-rm -f ${config_file}
+# Ensure menu file is not empty
+if [ ! -s "${menu_file}" ]; then
+    fatal 'fatal: file did not contain any menu items'
 fi
 
+cleanup() {
+    if [ "${maintain_menu}" != "true" ] && [ -f "${menu_file}" ]; then
+        rm -f -- "${menu_file}" 2>/dev/null
+    fi
+    if [ "${maintain_config}" != "true" ] && [ -f "${config_file}" ]; then
+        rm -f -- "${config_file}" 2>/dev/null
+    fi
 }
+trap cleanup EXIT INT TERM
 
-create_jgmenu "$@"
+# Run jgmenu
+jgmenu --config-file="${config_file}" --csv-file="${menu_file}"
