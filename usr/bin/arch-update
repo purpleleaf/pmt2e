@@ -1,0 +1,210 @@
+#!/bin/sh
+
+# Create a random temp file in /tmp using /dev/urandom
+TMP_FILE="/tmp/arch-update.$(
+    dd if=/dev/urandom bs=4 count=1 2>/dev/null \
+    | od -An -tx1 \
+    | tr -d ' \n'
+)"
+
+# Ensure the file exists
+: > "$TMP_FILE"
+
+# Automatically remove the temp file on exit or interruption
+cleanup() {
+    [ -f "$TMP_FILE" ] && rm -f "$TMP_FILE"
+}
+trap cleanup EXIT INT TERM
+
+HOME_DIR="${HOME}"
+
+name=""
+helper_name=""
+terminal_name=""
+helper_cmd=""
+do_check=0
+do_update=0
+do_notify=0
+font_icon=0
+
+# Remove ANSI color codes
+strip_colors() {
+    sed 's/\x1b
+
+\[[0-9;]*m//g'
+}
+
+aur_check_cmd() {
+    case "$1" in
+        pacaur) echo "pacaur check -q" ;;
+        trizen) echo "trizen -Qqu -a" ;;
+        yay)    echo "yay -Qqu -a" ;;
+        *)      echo "" ;;
+    esac
+}
+
+notify() {
+    notify-send "Pending updates:" \
+        --icon=/usr/share/pmt2e/icons/arch-update48.svg \
+        --expire-time=5000 \
+        "$1"
+}
+
+# ---------------------------------------------------------
+# SHARED FUNCTION: resolve terminal + helper with fallbacks
+# ---------------------------------------------------------
+resolve_tools() {
+    # Resolve helper
+    resolved_helper="$helper_cmd"
+    [ -z "$resolved_helper" ] && resolved_helper="pacman"
+
+    # Resolve terminal
+    resolved_terminal="$terminal_name"
+    [ -z "$resolved_terminal" ] && resolved_terminal="xterm"
+}
+
+# -------------------------
+# MENU SYSTEM (createjgmenu)
+# -------------------------
+show_menu() {
+    # Build optional argument string
+    opt_args=""
+    [ "$font_icon" -eq 1 ] && opt_args="$opt_args -F"
+    [ -n "$name" ] && opt_args="$opt_args -M$name"
+
+    # Resolve helper + terminal with fallbacks
+    resolve_tools
+
+    createjgmenu \
+        "Check updates|arch-update -C${resolved_helper}${opt_args}" \
+        "Show pending|arch-update -O${opt_args}" \
+        "Update|arch-update -U${resolved_terminal}:${resolved_helper}${opt_args}"
+}
+
+# -------------------------
+# Argument parsing
+# -------------------------
+
+for arg in "$@"; do
+    case "$arg" in
+        -O)
+            do_notify=1
+            do_check=0
+            do_update=0
+            ;;
+
+        MENU|menu)
+            show_menu
+            exit 0
+            ;;
+
+        -C*)
+            helper="$(printf "%s" "$arg" | cut -c3-)"
+            helper_cmd="$(aur_check_cmd "$helper")"
+
+            check_command="checkupdates | strip_colors > ${TMP_FILE}"
+            [ -n "$helper_cmd" ] && \
+                check_command="${check_command} && ${helper_cmd} | strip_colors >> ${TMP_FILE}"
+
+            do_check=1
+            do_update=0
+            do_notify=0
+            ;;
+
+        -U*)
+            tools="$(printf "%s" "$arg" | cut -c3-)"
+            terminal_name="$(printf "%s" "$tools" | cut -d: -f1)"
+            helper_name="$(printf "%s" "$tools" | cut -d: -f2)"
+
+            [ -z "$helper_name" ] && helper_name="sudo pacman"
+
+            do_update=1
+            do_check=0
+            do_notify=0
+            ;;
+
+        -N)
+            name="Upd:"
+            ;;
+
+        -M*)
+            name="$(printf "%s" "$arg" | cut -c3-)"
+            ;;
+
+        -F)
+            font_icon=1
+            ;;
+
+        -h|--help)
+            cat <<EOF
+
+arch-update -C[aur_helper] | -U<terminal>:<aur_helper> | [-O] [-N] | [-M<name>] [-F]
+
+-C<helper>       Check updates with pacman + optional AUR helper
+-Uterm:helper    Update system in terminal using pacman or AUR helper
+-O               Show pending updates as notification
+-N               Show name instead of icon
+-M<name>         Custom name
+-F               Use font glyph icon
+MENU             Show jgmenu menu
+
+EOF
+            exit 0
+            ;;
+    esac
+done
+
+# -------------------------
+# Actions
+# -------------------------
+
+if [ "$do_check" -eq 1 ]; then
+
+    if [ -n "$name" ]; then
+        echo "Checking..."
+    elif [ "$font_icon" -eq 1 ]; then
+        echo ""
+    else
+        echo "/usr/share/pmt2e/icons/refresh.svg"
+        echo ""
+    fi
+
+    # Run checkupdates + optional AUR helper
+    sh -c "$check_command"
+
+    updates="$(cat "$TMP_FILE")"
+    num_upd=$(printf "%s\n" "$updates" | wc -l | tr -d ' ')
+
+    if [ -n "$name" ]; then
+        if [ "$num_upd" -gt 0 ]; then
+            printf "%s %s\n" "$name" "$num_upd"
+        else
+            printf "Up-to-date\n"
+        fi
+
+    elif [ "$font_icon" -eq 1 ]; then
+        echo ""
+
+    else
+        if [ "$num_upd" -gt 0 ]; then
+            echo "/usr/share/pmt2e/icons/arch-icon-notify.svg"
+            echo ""
+        else
+            echo "/usr/share/pmt2e/icons/arch-icon.svg"
+            echo ""
+        fi
+    fi
+fi
+
+if [ "$do_update" -eq 1 ]; then
+    resolve_tools
+    cmd="${resolved_terminal} -e 'sh -c \"${resolved_helper} -Syu; echo Press enter to exit; read; killall -SIGUSR1 tint2\"'"
+    sh -c "$cmd"
+fi
+
+if [ "$do_notify" -eq 1 ]; then
+    updates="$(cat "$TMP_FILE")"
+    notify "$updates"
+fi
+
+exit 0
