@@ -1,24 +1,103 @@
 #!/bin/sh
+# Simple jgmenu CSV helper
 # Author: purpleleaf <max at ganoia dot eu>
 # POSIX sh compatible utility to create jgmenus
+# Dependencies: jgmenu, yad
+# Rules: one comma per item (Label,command). Double quotes are forbidden in labels.
 
-fatal() {
-    printf '%s\n' "$1" >&2
+show_error() {
+    msg="$1"
+    if command -v yad >/dev/null 2>&1; then
+        yad --form --field="$msg:LBL" \
+            --title="CreateJgmenu Error" \
+            --window-icon="dialog-error" \
+            --width="500" --center
+    else
+        printf '%s\n' "$msg" 1>&2
+    fi
+}
+
+die() {
+    printf '%s\n' "$1" >/dev/null 2>&1
+    # Prefer GUI dialog if available, otherwise print to stderr
+    show_error "$1"
     exit "${2:-1}"
 }
 
 show_help() {
     printf '\n'
-    printf '%s\n' "Usage: $0 -c config_file | -m menu_file | -h | list of command to feed jgmenu"
+    printf '%s\n' "Usage: $0 -c config_file | -m menu_file | -h | list of menu items"
     printf '\n'
-    printf '%s\n' '  -h Show this help message and exit.'
-    printf '%s\n' '  -c config_file, use config_file to set jgmenu configuration.'
-    printf '%s\n' '  -m menu_file, use menu_file to fill jgmenu.'
+    printf '%s\n' 'Rules (simple):'
+    printf '%s\n' '  - Each menu item must contain exactly one comma: Label,/path/to/command'
+    printf '%s\n' '  - Double quotes (") are not allowed inside labels. Commands may contain quotes; see examples below.'
+    printf '%s\n' '  - Separator tokens: ^sep or ^sep(text) (use them as whole items).'
+    printf '%s\n' '  - Blank lines and lines starting with # are ignored.'
     printf '\n'
-    printf '%s\n' 'If -m is provided any other eventual argument passed to build the menu will be ignored.'
-    printf '%s\n' 'If no -m flag is provided menu can be build in the form "Menu name,/command/to/execute".'
+    printf '%s\n' 'Note: labels and commands may contain spaces. If you have multiple items on the command line, separate them with spaces:'
+    printf '%s\n' '  Example: "Label,cmd" "Label 2,/usr/bin/cmd"'
+    printf '\n'
+    printf '%s\n' 'Note on quoting'
+    printf '%s\n' '  - Unmatched quotes are a shell parse error that occurs before this script runs.'
+    printf '%s\n' '  - To include double quotes in the command, wrap the whole item in single quotes:'
+    printf '%s\n' "      $0 'Label,bash -c \"echo \\\"hello world\\\"\"'"
+    printf '%s\n' '  - Or escape inner quotes when using double quotes:'
+    printf '%s\n' "      $0 \"Label,bash -c \\\"echo \\\\\\\"hello\\\\\\\"\\\"\""
+    printf '%s\n' '  - To avoid shell quoting issues, put items in a file and pass -m menu_file:'
+    printf '%s\n' '  - If you see a shell error about an unmatched quote, the shell failed to parse your command;'
+    printf '%s\n' '  - use single quotes around the whole argument or put the item in a file.'
+    printf '\n'
+    printf '%s\n' 'Example menu file lines:'
+    printf '%s\n' '  Open Terminal,/usr/bin/xterm'
+    printf '%s\n' '  ^sep'
+    printf '%s\n' '  ^sep(Favorites)'
+    printf '%s\n' '  Open Terminal,/usr/bin/xterm'
+    printf '%s\n' '  Run Script,bash -c "echo \"hi\""'
+    printf '%s\n' "  $0 -m menu.txt"
+
     printf '\n'
     exit 0
+}
+
+# Validate a single logical menu item (one argument or one file line)
+validate_csv() {
+    raw=$1
+
+    # Trim leading/trailing whitespace (POSIX-safe)
+    line=$(printf '%s' "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+    # Ignore blank lines and comments
+    [ -z "$line" ] && return 0
+    case "$line" in
+        \#*) return 0 ;;
+    esac
+
+    # Accept separators
+    case "$line" in
+        ^sep) return 0 ;;
+        ^sep\(*) return 0 ;;
+    esac
+
+    # Enforce exactly one comma
+    case "$line" in
+        *,*,*)
+            die "invalid entry \"$raw\" — too many commas."
+            ;;
+        *,*)
+            label=${line%%,*}
+            cmd=${line#*,}
+            [ -z "$label" ] && die "empty label in \"$raw\""
+            [ -z "$cmd" ] && die "empty command in \"$raw\""
+            case "$label" in
+                *\"*|*\'*) die "quotes are not allowed inside label: \"$raw\"" ;;
+            esac
+            cmd=$(printf '%s' "$cmd" | sed 's/\\"/"/g')
+            return 0
+            ;;
+        *)
+            die "invalid entry \"$raw\" — expected Label,command or separator"
+            ;;
+    esac
 }
 
 menu_items=""
@@ -30,31 +109,26 @@ menu_file=""
 # Parse options
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -h|--help)
-            show_help
-            ;;
+        -h|--help) show_help ;;
         -c|--config)
-            if [ -z "$2" ]; then
-                fatal 'fatal: option -c requires an argument' 2
-            fi
+            [ -z "$2" ] && die 'option -c requires an argument' 2
             config_file="$2"
             maintain_config=true
             shift 2
             ;;
         -m|--menu)
-            if [ -z "$2" ]; then
-                fatal 'fatal: option -m requires an argument' 2
-            fi
+            [ -z "$2" ] && die 'option -m requires an argument' 2
             menu_file="$2"
+            maintain_menu=true
             shift 2
             ;;
         *)
             if [ -z "$menu_file" ]; then
+                validate_csv "$1"
                 if [ -z "$menu_items" ]; then
-                    menu_items="$1"
+                    menu_items=$1
                 else
-                    menu_items="${menu_items}
-$1"
+                    menu_items=$(printf '%s\n%s' "$menu_items" "$1")
                 fi
             fi
             shift 1
@@ -62,21 +136,14 @@ $1"
     esac
 done
 
-# Expand leading ~/ to $HOME (optional)
+# Expand leading ~/ to $HOME
 case $menu_file in
     ~/*) menu_file="$HOME/${menu_file#~/}" ;;
 esac
 
-# If menu_file is provided it must be a regular readable non-empty file.
-if [ -n "$menu_file" ] && [ -f "$menu_file" ] && [ -r "$menu_file" ] && [ -s "$menu_file" ]; then
-    maintain_menu=true
-elif [ -n "$menu_file" ]; then
-    fatal "fatal: menu file \"$menu_file\" does not exist or is not readable."
-fi
-
 # Create config file if not provided
 if [ -z "$config_file" ]; then
-    config_file=$(mktemp /tmp/jgmenu-config.XXXXXXXXXX) || fatal 'fatal: mktemp failed or is not available'
+    config_file=$(mktemp /tmp/jgmenu-config.XXXXXXXXXX) || die 'mktemp failed'
     : > "${config_file}"
     cat <<'EOF' >"${config_file}"
 stay_alive          = 0
@@ -89,40 +156,35 @@ font                = Sans 10
 icon_size           = 0
 EOF
 else
-    # If user provided a config file path, ensure it exists and is readable
     case $config_file in
         ~/*) config_file="$HOME/${config_file#~/}" ;;
     esac
-    if [ ! -f "$config_file" ] || [ ! -r "$config_file" ]; then
-        fatal "fatal: config file \"$config_file\" does not exist or is not readable"
-    fi
+    [ -f "$config_file" ] || die "config file \"$config_file\" does not exist"
+    [ -r "$config_file" ] || die "config file \"$config_file\" is not readable"
     maintain_config=true
 fi
 
 # If no menu_file was provided, create one from positional menu_items
 if [ -z "$menu_file" ]; then
-    menu_file=$(mktemp /tmp/jgmenu-menu.XXXXXXXXXX) || fatal 'fatal: mktemp failed or is not available'
+    menu_file=$(mktemp /tmp/jgmenu-menu.XXXXXXXXXX) || die 'mktemp failed'
     : > "${menu_file}"
-    if [ -n "${menu_items}" ]; then
-        printf '%s\n' "${menu_items}" >> "${menu_file}"
-    fi
+    [ -n "${menu_items}" ] && printf '%s\n' "${menu_items}" >> "${menu_file}"
     maintain_menu=false
 fi
 
 # Ensure menu file is not empty
-if [ ! -s "${menu_file}" ]; then
-    fatal 'fatal: file did not contain any menu items'
-fi
+[ ! -s "${menu_file}" ] && die 'file did not contain any menu items'
+
+# Validate menu file contents (one logical item per physical line)
+while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+    validate_csv "$raw_line"
+done < "$menu_file"
 
 cleanup() {
-    if [ "${maintain_menu}" != "true" ] && [ -f "${menu_file}" ]; then
-        rm -f -- "${menu_file}" 2>/dev/null
-    fi
-    if [ "${maintain_config}" != "true" ] && [ -f "${config_file}" ]; then
-        rm -f -- "${config_file}" 2>/dev/null
-    fi
+    [ "${maintain_menu}" != "true" ] && [ -f "${menu_file}" ] && rm -f -- "${menu_file}" 2>/dev/null
+    [ "${maintain_config}" != "true" ] && [ -f "${config_file}" ] && rm -f -- "${config_file}" 2>/dev/null
 }
 trap cleanup EXIT INT TERM
 
-# Run jgmenu
+# Run jgmenu (assumed launched by your executor)
 jgmenu --config-file="${config_file}" --csv-file="${menu_file}"
