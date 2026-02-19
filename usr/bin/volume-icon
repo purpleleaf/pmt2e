@@ -1,12 +1,6 @@
 #!/bin/bash
 
 # This script display an appropriate volume icon according to the volume level
-
-# Authors: 
-# Piotr Miller nwg.piotr@gmail.com
-# Max Franco purpleleaf@ganoia.eu
-# License: GPL3
-
 # Dependencies: alsa-utils dunst
 
 scriptname=`basename $0`
