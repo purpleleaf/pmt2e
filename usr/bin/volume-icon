@@ -1,190 +1,261 @@
-#!/bin/bash
+#!/bin/sh
 
-# This script display an appropriate volume icon according to the volume level
-# Dependencies: alsa-utils dunst
+# Lightweight volume script for Tint2 executor
+# Compatible with BusyBox (Alpine), BSD, macOS, Linux /bin/sh
+# Dependencies: alsa-utils, dunst (optional), yad (optional)
+# NOTE: Save this script as UTF-8 so the literal glyphs display correctly.
 
-scriptname=`basename $0`
+scriptname=$(basename "$0")
 action=""
 output=""
 
-die() { echo "$*" 1>&2 ; exit 1; }
+die() {
+    printf '%s\n' "$*" >&2
+    exit 1
+}
 
-while getopts ":hudmps:ift" opt; do
-  case ${opt} in
-# allow only one action between help, set, up, down, toggle
-    h)
-      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
-      action="help"
-	  output="help"
-      ;;
-    p)
-      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
-      action="print"
-      ;;
-    s)
-      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
-      action="set"
-      if [[ "$OPTARG" =~ ^[0-9]+$ ]] && [[ "$OPTARG" -ge 0 ]] && [[ "$OPTARG" -le 100 ]]; then
-      input_vol="$OPTARG"
-      else
-        echo "error: -s argument is not a valid number" >&2; exit 1 
-      fi
-      ;;
-    u)
-      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
-      action="up"
-      ;;
-    d)
-      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
-      action="down"
-      ;;
-    m)
-      [ -n "$action" ] && die "Only one action can be chosen between -h -p -u -d -s -m"
-      action="toggle"
-      ;;
-# allow only one option between icon, text or font glyph
-    i)
-      [ -n "$output" ] && die "Only one action can be chosen between -i -f -t"
-      output="icon"
-      ;;
-    f)
-      [ -n "$output" ] && die "Only one action can be chosen between -i -f -t"
-      output="glyph"
-      ;;
-    t)
-      [ -n "$output" ] && die "Only one action can be chosen between -i -f -t"
-      output="text"
-      ;;
-# require an argument for -s option 
-    :)
-      die "Option -"$OPTARG" requires an argument"
-      ;;
-    *)
-      die "Invalid option -"$OPTARG""
-      ;;
-  esac
+# Show YAD (if present) then die with message
+yad_die() {
+    msg="$1"
+    command -v yad >/dev/null 2>&1 && \
+        yad --text="$msg" --button=OK --center --on-top
+    die "$msg"
+}
+
+# Ensure amixer exists early
+command -v amixer >/dev/null 2>&1 || yad_die "amixer not found; ALSA tools required"
+
+# Parse options
+while getopts "hudmps:ift" opt; do
+    case "$opt" in
+        h) [ -n "$action" ] && die "Only one action allowed"; action="help"; output="help" ;;
+        p) [ -n "$action" ] && die "Only one action allowed"; action="print" ;;
+        s)
+            [ -n "$action" ] && die "Only one action allowed"
+            action="set"
+            case "$OPTARG" in
+                ''|*[!0-9]*) die "error: -s argument must be a number 0–100" ;;
+                *)
+                    [ "$OPTARG" -ge 0 ] && [ "$OPTARG" -le 100 ] || die "error: -s argument must be 0–100"
+                    input_vol="$OPTARG"
+                    ;;
+            esac
+            ;;
+        u) [ -n "$action" ] && die "Only one action allowed"; action="up" ;;
+        d) [ -n "$action" ] && die "Only one action allowed"; action="down" ;;
+        m) [ -n "$action" ] && die "Only one action allowed"; action="toggle" ;;
+        i) [ -n "$output" ] && die "Only one output allowed"; output="icon" ;;
+        f) [ -n "$output" ] && die "Only one output allowed"; output="glyph" ;;
+        t) [ -n "$output" ] && die "Only one output allowed"; output="text" ;;
+        :) die "Option -$OPTARG requires an argument" ;;
+        *) die "Invalid option -$OPTARG" ;;
+    esac
 done
 
-# exit if $action and/or $output are not set
-if [[ ! -n "$action" ]] || [[ ! -n "$output" ]]; then
-die "$scriptname requires both an action [-h | -u | -d | -m | -s | p] and an output [-i | -f | -t] option. \
-Please run \"$scriptname -h\" for usage."
-fi
+[ -n "$action" ] && [ -n "$output" ] || die "$scriptname requires an action and an output option."
 
-# Get actual volume level
-# Check volume for Lefth/Right audio channel or Mono Channel
-control="Master"
-levels=$(amixer sget $control | grep -o -e '\[[[:digit:]]*%\]')
-num=`echo "$levels" | wc -l`
-sum=`echo "$levels 0" | tr '[%]\n' '  + ' | xargs expr`
-vol=`expr $sum / $num`
- 
+###############################################################################
+# Helpers: find control, read volume, refresh state
+###############################################################################
 
-show_help () {
-  printf -- "\nUsage: $scriptname [ -h | -n | -m | -m ] [ -i | -f | -t ]\n"
-  printf -- "\n"
-  printf -- "  -h, Show this help message and exit.\n"
-  printf -- "  -s, set volume to the number passed as argument.\n"
-  printf -- "  -u, raise volume.\n"
-  printf -- "  -d, lower volume.\n"
-  printf -- "  -m, toggle mute.\n\n"
-  printf -- "  -i, output an icon path to Tint2.\n"
-  printf -- "  -f, output a font glyph instead of icon.\n"
-  printf -- "  -t, output text instead of icon.\n"
-  printf -- "Only one option for both the two option group must be provided.\n"
-  printf -- "If -s is selected an integer number (0-100) must be provided.\n"
-  printf -- "If -h is selected no other option is required.\n\n"
-  exit 0	
+ctl=$(
+    amixer scontrols |
+    while IFS= read -r ctl; do
+        case "$ctl" in
+            *"'"*"'"*)
+                name=$(printf '%s\n' "$ctl" | sed "s/.*'\(.*\)'.*/\1/")
+                if amixer get "$name" | grep -q '%'; then
+                    printf '%s\n' "$name"
+                    break
+                fi
+                ;;
+        esac
+    done
+)
+
+[ -n "$ctl" ] || yad_die "No volume control available on this device."
+
+# Extract numeric volume (BusyBox + BSD compatible), assign to $vol and validate
+extract_volume() {
+    vol_out=$(
+        amixer get "$ctl" |
+        while IFS= read -r line; do
+            case "$line" in
+                *%*)
+                    set -- $(printf '%s\n' "$line" | tr '[]' '  ')
+                    for field in "$@"; do
+                        case "$field" in
+                            *%)
+                                printf '%s\n' "${field%%%}"
+                                return 0
+                                ;;
+                        esac
+                    done
+                    ;;
+            esac
+        done
+    )
+
+    case "$vol_out" in
+        ''|*[!0-9]*)
+            yad_die "Failed to read numeric volume from control: $ctl"
+            ;;
+        *)
+            vol="$vol_out"
+            printf '%s\n' "$vol_out"
+            ;;
+    esac
 }
 
-function is_mute {
-    amixer get Master | grep '%' | grep -oE '[^ ]+$' | grep off > /dev/null
+is_mute() {
+    amixer get "$ctl" | grep '%' | grep -q off
 }
 
-function send_notification {
-    dunstify -i $2 -t 1000 -h string:x-dunst-stack-tag:volume -u normal "$1%" -h int:value:$1
-}
+###############################################################################
+# Notification and icon/glyph functions
+###############################################################################
 
-function get_icon {
-if [[ "$(amixer get Master | grep '%' | grep -oE '[^ ]+$')" == *"[on]"* ]]; then
-        if [[ ${vol} -ge 90 ]]; then
-            icon="/usr/share/pmt2e/icons/vol-full.svg"
-        elif [[ ${vol} -ge 40 ]]; then
-            icon="/usr/share/pmt2e/icons/vol-medium.svg"
-        elif [[ ${vol} -ge 10 ]]; then
-            icon="/usr/share/pmt2e/icons/vol-low.svg"
-        else
-            icon="/usr/share/pmt2e/icons/vol-lowest.svg"
-fi
-else
-	icon="/usr/share/pmt2e/icons/vol-muted.svg"
-fi
-echo ${icon}
-}
+send_notification() {
+    # $1 = numeric volume (optional)
+    # $2 = glyph (literal character) - optional; if empty, recompute
+    local v="$1"
+    local glyph="$2"
 
-function get_glyph {
-if [[ "$(amixer get Master | grep '%' | grep -oE '[^ ]+$')" == *"[on]"* ]]; then
-	if [[ ${vol} -ge 66 ]]; then
-		glyph="󰕾"
-	elif [[ ${vol} -ge 33 ]]; then
-		glyph="󰖀"
-	else
-		glyph="󰕿"
-	fi
-else
-	glyph="󰖁"
-fi
-echo ${glyph}
-}
-
-volicon=$(get_icon)
-
-# print action only output to tint2, no notification
-case ${action} in
-  help)
-    show_help
-    exit
-    ;;
-  set)
-    amixer set Master "${input_vol}"% -q
-    send_notification ${input_vol} ${volicon}
-    ;;
-  up)
-    if is_mute ; then
-      amixer sset Master toggle -q
-    fi
-    amixer sset Master 5%+ -q
-    send_notification ${vol} ${volicon}
-    ;;
-  down)
-    if is_mute ; then
-      amixer -D default set Master on > /dev/null
-    fi
-    amixer sset Master 5%- -q
-    send_notification ${vol} ${volicon}
-    ;;
-  toggle)
-    if is_mute ; then
-      amixer sset Master toggle -q
-      notifyicon=$(get_icon)
-      send_notification ${vol} ${notifyicon}
+    # Ensure we have the latest volume/mute state before computing glyph
+    if [ -z "$v" ]; then
+        extract_volume >/dev/null 2>&1 || true
+        v="$vol"
     else
-      amixer sset Master toggle -q
-      dunstify -i "/usr/share/pmt2e/icons/vol-muted.svg" -t 1000 -h string:x-dunst-stack-tag:volume -u normal "Muted"
+        # keep vol in sync with provided numeric value
+        vol="$v"
     fi
-    ;;
-    print)
-    :
+
+    if [ -z "$glyph" ]; then
+        glyph=$(get_glyph)
+    fi
+
+    if command -v dunstify >/dev/null 2>&1; then
+        # Put glyph at start of message so notification shows the glyph character
+        dunstify -t 1000 -h string:x-dunst-stack-tag:volume -u normal "${glyph} ${v}%" -h int:value:"$v"
+    else
+        printf '%s\n' "Volume: $v%%" >&2
+    fi
+}
+
+get_icon() {
+    if is_mute; then
+        printf '%s\n' "/usr/share/pmt2e/icons/vol-muted.svg"
+    else
+        if [ "$vol" -ge 90 ]; then
+            printf '%s\n' "/usr/share/pmt2e/icons/vol-full.svg"
+        elif [ "$vol" -ge 40 ]; then
+            printf '%s\n' "/usr/share/pmt2e/icons/vol-medium.svg"
+        elif [ "$vol" -ge 10 ]; then
+            printf '%s\n' "/usr/share/pmt2e/icons/vol-low.svg"
+        else
+            printf '%s\n' "/usr/share/pmt2e/icons/vol-lowest.svg"
+        fi
+    fi
+}
+
+# Literal Nerd Font glyphs (private use area). Ensure your notification font supports them.
+# Mapping provided by user:
+# High volume: U+F057E
+# Medium volume: U+F0580
+# Low volume: U+F057F
+# Mute: U+F075F
+get_glyph() {
+    if is_mute; then
+        # Print the exact character U+F075F (Mute)
+        printf '󰝟\n'
+    else
+        if [ "$vol" -ge 90 ]; then
+            # Print the exact character U+F057E (High volume)
+            printf '󰕾\n'
+        elif [ "$vol" -ge 66 ]; then
+            # Print the exact character U+F0580 (Medium volume)
+            printf '󰖀\n'
+        elif [ "$vol" -ge 33 ]; then
+            # Print the exact character U+F057F (Low volume)
+            printf '󰕿\n'
+        fi
+    fi
+}
+
+# Refresh numeric volume and derived state
+refresh_volume() {
+    extract_volume >/dev/null 2>&1 || true
+    volicon=$(get_icon)
+    volglyph=$(get_glyph)
+}
+
+# Initialize icon/glyph (use refresh_volume to set $vol, volicon, volglyph)
+refresh_volume
+
+###############################################################################
+# Actions (with error checks on amixer operations)
+###############################################################################
+
+show_help() {
+    printf '\nUsage: %s [ -h | -u | -d | -m | -s N ] [ -i | -f | -t ]\n\n' "$scriptname"
+    printf '  -h  Show help\n'
+    printf '  -s  Set volume (0–100)\n'
+    printf '  -u  Raise volume\n'
+    printf '  -d  Lower volume\n'
+    printf '  -m  Toggle mute\n\n'
+    printf '  -i  Output icon path\n'
+    printf '  -f  Output font glyph\n'
+    printf '  -t  Output text\n\n'
+    exit 0
+}
+
+case "$action" in
+    help) show_help ;;
+    set)
+        amixer set "$ctl" "${input_vol}%" >/dev/null 2>&1 || yad_die "Failed to set volume to ${input_vol}%"
+        refresh_volume
+        send_notification "$vol" "$volglyph"
+        ;;
+    up)
+        # If muted, unmute first
+        if is_mute; then
+            amixer sset "$ctl" toggle >/dev/null 2>&1 || true
+        fi
+        amixer sset "$ctl" 5%+ >/dev/null 2>&1 || yad_die "Failed to raise volume"
+        refresh_volume
+        send_notification "$vol" "$volglyph"
+        ;;
+    down)
+        if is_mute; then
+            amixer -D default set "$ctl" on >/dev/null 2>&1 || true
+        fi
+        amixer sset "$ctl" 5%- >/dev/null 2>&1 || yad_die "Failed to lower volume"
+        refresh_volume
+        send_notification "$vol" "$volglyph"
+        ;;
+    toggle)
+        amixer sset "$ctl" toggle >/dev/null 2>&1 || yad_die "Failed to toggle mute"
+        refresh_volume
+        if is_mute; then
+            # show explicit muted text with glyph
+            if command -v dunstify >/dev/null 2>&1; then
+                dunstify -t 1000 -h string:x-dunst-stack-tag:volume -u normal "󰝟 Muted"
+            else
+                printf '%s\n' "Muted" >&2
+            fi
+        else
+            send_notification "$vol" "$volglyph"
+        fi
+        ;;
+    print) ;;
 esac
 
-case $output in
-  glyph)
-    get_glyph
-    ;;
-  text)
-    echo "Vol: ${vol}%"
-    ;;
-  icon)
-    get_icon
-    ;;
+###############################################################################
+# Output mode
+###############################################################################
+
+case "$output" in
+    glyph) get_glyph ;;
+    text) printf 'Vol: %s%%\n' "$vol" ;;
+    icon) get_icon ;;
 esac
