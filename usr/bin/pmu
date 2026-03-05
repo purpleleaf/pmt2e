@@ -1,0 +1,382 @@
+#!/bin/sh
+
+# This script updates Arch based, Debian based, or Alpine systems
+# Authors: Max Franco purpleleaf@ganoia.eu
+# License: GPL3
+
+# Dependencies: jgmenu, dunstify, createjgmenu, yad (optional)
+# Arch and derivatives: pacman-contrib [ yay | paru | trizen | aura ]
+
+scriptname=$(basename "$0")
+action=""
+output=""
+
+# -------------------------------------------------------------------
+# EARLY UTILITIES
+# -------------------------------------------------------------------
+
+# Rigoroso nell'incerto: verifica dei comandi standard POSIX
+exists() { 
+    command -v "$1" >/dev/null 2>&1 
+}
+
+# Semplice nel certo: messaggi d'errore diretti (CLI o GUI se disponibile)
+die() { 
+    msg="$1"
+    if exists yad; then
+        yad --form --field="$msg:LBL" \
+            --title="Network Error" \
+            --window-icon="network-error" \
+            --width="500" --center
+    else
+        printf '%s\n' "$msg" 1>&2
+    fi
+    exit 1
+}
+
+help_error_action="Only one action can be chosen between -h -c -u -m -n"
+help_error_output="Only one output can be chosen between -i -f -t"
+
+get_aur_helper() {
+    if [ -n "$aur_helper" ]; then return; fi
+    
+    if exists yay; then aur_helper="yay"
+    elif exists paru; then aur_helper="paru"
+    elif exists trizen; then aur_helper="trizen"
+    elif exists aura; then aur_helper="aura"
+    else aur_helper="pacman"; fi
+}
+
+# -------------------------------------------------------------------
+# CONFIGURATION & TERMINAL PARSING
+# -------------------------------------------------------------------
+
+config_dir="$HOME/.config/pmt2e"
+config="$config_dir/pmu.conf"
+
+terminal_list="xterm $TERMINAL x-terminal-emulator urxvt rxvt st qterminal aterm uxterm konsole gnome-terminal xfce4-terminal mate-terminal lxterminal terminology Eterm roxterm terminator tilix guake tilda alacritty kitty wezterm foot ghostty"
+
+custom_check_cmd=""
+custom_upgrade_cmd=""
+refresh_cmd=""
+arch_use_helper="false"
+
+terminal_from_list=$(
+    for term in $terminal_list; do
+        if exists "$term"; then
+            printf '%s\n' "$term"
+            exit 0
+        fi
+    done
+)
+
+if [ -f "$config" ]; then
+    terminal_from_conf=$(sed -n 's/^terminal=//p' "$config" | head -n1)
+    # Sanitize terminal: Keep only the first word
+    terminal_from_conf=${terminal_from_conf%% *}
+
+    custom_check_cmd=$(sed -n 's/^check_cmd=//p' "$config" | head -n1)
+    custom_upgrade_cmd=$(sed -n 's/^upgrade_cmd=//p' "$config" | head -n1)
+    refresh_cmd=$(sed -n 's/^refresh_cmd=//p' "$config" | head -n1)
+    
+    arch_use_helper_raw=$(sed -n 's/^arch_use_helper=//p' "$config" | head -n1)
+    # Sanitize arch_use_helper: Enforce strict boolean
+    case "$(printf '%s' "$arch_use_helper_raw" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|y|on) arch_use_helper="true" ;;
+        *) arch_use_helper="false" ;;
+    esac
+
+    if [ -n "$terminal_from_conf" ] && exists "$terminal_from_conf"; then
+        terminal="$terminal_from_conf"
+    elif [ -n "$terminal_from_list" ]; then
+        terminal="$terminal_from_list"
+    fi
+else
+    if [ ! -d "$config_dir" ]; then
+        mkdir -p "$config_dir"
+    fi
+
+    if [ -n "$terminal_from_list" ]; then
+        printf 'terminal=%s\n' "$terminal_from_list" > "$config"
+        terminal="$terminal_from_list"
+    fi
+fi
+
+if [ -z "$terminal" ]; then
+    die "No available terminal"
+fi
+
+# -------------------------------------------------------------------
+# PARSE OPTIONS
+# -------------------------------------------------------------------
+
+while getopts ":hcumnift" opt; do
+    case ${opt} in
+        h) [ -n "$action" ] && die "${help_error_action}" || action="help" ;;
+        c) [ -n "$action" ] && die "${help_error_action}" || action="check" ;;
+        u) [ -n "$action" ] && die "${help_error_action}" || action="upgrade" ;;
+        m) [ -n "$action" ] && die "${help_error_action}" || action="menu" ;;
+        n) [ -n "$action" ] && die "${help_error_action}" || action="notify" ;;
+        i) [ -n "$output" ] && die "${help_error_output}" || output="icon" ;;
+        f) [ -n "$output" ] && die "${help_error_output}" || output="glyph" ;;
+        t) [ -n "$output" ] && die "${help_error_output}" || output="text" ;;
+        *) die "Invalid option -$OPTARG" ;;
+    esac
+done
+
+if [ -z "$action" ] || { [ "$action" != "help" ] && [ -z "$output" ]; }; then
+    die "$scriptname requires an action [-c | -u | -m | -n] and an output [-i | -f | -t ] option. Run \"$scriptname -h\" for usage."
+fi
+
+# -------------------------------------------------------------------
+# CORE FUNCTIONS
+# -------------------------------------------------------------------
+
+show_help() {
+    printf "Usage: %s -[Action] -[Output]\n\n" "$scriptname"
+    printf "A universal update checker and updater for status bars (Polybar, Waybar, tint2, sfwbar).\n\n"
+    printf "ACTIONS (Choose exactly one):\n"
+    printf "  -c    Check for updates and print the status\n"
+    printf "  -n    Trigger a desktop notification of available updates\n"
+    printf "  -m    Show an interactive jgmenu with update options\n"
+    printf "  -u    Launch the terminal and execute the system upgrade\n"
+    printf "  -h    Show this help message and exit\n\n"
+    printf "OUTPUT FORMATS (Choose exactly one):\n"
+    printf "  -t    Text output (e.g., 'Upd: 5' or 'Up-to-date')\n"
+    printf "  -f    Glyph/Font icon output (e.g., 󱆢 or 󰕥)\n"
+    printf "  -i    Image icon path output (e.g., /usr/share/pmt2e/icons/...)\n\n"
+    printf "EXAMPLES:\n"
+    printf "  %s -c -t    # Check updates and output as text\n" "$scriptname"
+    printf "  %s -u -f    # Upgrade system using glyphs for UI state\n" "$scriptname"
+    printf "  %s -n -i    # Notify pending updates using SVG icons\n\n" "$scriptname"
+    printf "CONFIGURATION:\n"
+    printf "  User overrides can be set in: ~/.config/pmt2e/pmu.conf\n"
+    exit 0
+}
+
+find_updates() {
+    updates=""
+
+    # 1. Arch Linux
+    if exists pacman; then
+        get_aur_helper
+        
+        if [ "$arch_use_helper" = "true" ]; then
+            updates="$(LC_ALL=C $aur_helper -Qu 2>/dev/null | sed 's/ .*//')"
+        else
+            if [ "$aur_helper" = "pacman" ]; then
+                aur_check_cmd="pacman -Qu"
+            else
+                aur_check_cmd="$aur_helper -Qu -a"
+            fi
+            
+            updates="$(LC_ALL=C checkupdates --nocolor 2>/dev/null | sed 's/ .*//')" || updates=""
+            aur_updates="$($aur_check_cmd 2>/dev/null)"
+            
+            if [ -n "$aur_updates" ]; then
+                if [ -n "$updates" ]; then
+                    updates=$(printf '%s\n%s' "$updates" "$aur_updates")
+                else
+                    updates="$aur_updates"
+                fi
+            fi
+        fi
+
+    # 2. Fedora / RHEL
+    elif exists dnf; then
+        dnf_out=$(LC_ALL=C dnf -q check-update 2>/dev/null)
+        if [ "$?" -eq 100 ]; then
+            updates=$(echo "$dnf_out" | sed -n '/^$/d; s/ .*//; s/\.[^.]*$//p')
+        fi
+
+    # 3. Debian / Ubuntu / antiX
+    elif exists apt && exists dpkg; then
+        updates=$(LC_ALL=C apt-get -s dist-upgrade 2>/dev/null | sed -n 's/^Inst \([^ ]*\).*/\1/p')
+
+    # 4. PCLinuxOS
+    elif exists apt-get && exists rpm; then
+        updates=$(LC_ALL=C apt-get -s dist-upgrade 2>/dev/null | sed -n 's/^Inst \([^ ]*\).*/\1/p')
+
+    # 5. openSUSE
+    elif exists zypper; then
+        updates=$(LC_ALL=C zypper --quiet --non-interactive --no-refresh list-updates 2>/dev/null | sed -n '1,2d; /^$/d; s/^[^|]*|[^|]*|\([^|]*\)|.*/\1/; s/ //g; p')
+
+    # 6. Alpine Linux
+    elif exists apk; then
+        updates=$(LC_ALL=C apk version -l '<' 2>/dev/null | sed -n 's/-[0-9].*//p')
+
+    # 7. Void Linux
+    elif exists xbps-install; then
+        updates=$(LC_ALL=C xbps-install -un 2>/dev/null | sed -n 's/ .*//; s/-[0-9].*//p')
+
+    # 8. Solus
+    elif exists eopkg; then
+        updates=$(LC_ALL=C eopkg list-upgrades 2>/dev/null | sed -n 's/ .*//p')
+
+    # 9. Gentoo
+    elif exists emerge; then
+        updates=$(LC_ALL=C emerge -pquDN @world 2>/dev/null | sed -n 's/.*\] \([^ ]*\).*/\1/; s/-[0-9].*//p')
+
+    # 10. Slackware
+    elif exists slackpkg; then
+        updates=$(ls -1 /var/log/packages/ 2>/dev/null | awk '
+        NR==FNR {
+            match($0, /-[^-]+-[^-]+-[^-]+$/)
+            if (RSTART > 0) {
+                basename = substr($0, 1, RSTART-1)
+                installed[basename] = $0
+            }
+            next
+        }
+        {
+            basename = $1
+            fullname = $5
+            if (basename in installed && installed[basename] != fullname) {
+                print basename
+            }
+        }' - /var/lib/slackpkg/pkglist 2>/dev/null)
+
+    # 11. Custom User Defined Fallback
+    elif [ -n "$custom_check_cmd" ]; then
+        updates=$(sh -c "$custom_check_cmd" 2>/dev/null)
+    fi
+
+    num_upd=$(printf '%s\n' "$updates" | grep -c '[^ 	]')
+}
+
+do_check() {
+    if [ "$output" = "text" ]; then
+        printf "Checking...\n"
+    elif [ "$output" = "glyph" ]; then
+        printf "󰂪\n"
+    elif [ "$output" = "icon" ]; then
+        printf "/usr/share/pmt2e/icons/refresh.svg\n"
+    fi
+
+    find_updates
+
+    if [ "$output" = "text" ]; then
+        if [ "$num_upd" -gt 0 ]; then
+            printf " Upd: %d\n" "$num_upd"
+        else
+            printf " Up-to-date\n"
+        fi
+    elif [ "$output" = "glyph" ]; then
+        if [ "$num_upd" -gt 0 ]; then
+            printf "󱆢\n"
+        else
+            printf "󰕥\n"
+        fi
+    elif [ "$output" = "icon" ]; then
+        if [ "$num_upd" -gt 0 ]; then
+            printf "/usr/share/pmt2e/icons/arch-icon-notify.svg\n"
+        else
+            printf "/usr/share/pmt2e/icons/arch-icon.svg\n"
+        fi
+    fi
+
+    exit 0
+}
+
+do_notify() {
+    notify_icon="/usr/share/pmt2e/icons/arch-update48.svg"
+    find_updates
+    
+    if [ -z "$updates" ]; then
+        exit 0
+    fi
+    dunstify -i "$notify_icon" -t 20000 \
+        -h string:x-dunst-stack-tag:upgradables \
+        -u normal "Available updates:" "$updates"
+    exit 0
+}
+
+set_upgrade_cmd() {
+    if exists pacman; then
+        get_aur_helper
+        upgrade_cmd="${aur_helper} -Syu"
+        if [ "$(id -u)" -ne 0 ] && [ "$aur_helper" = "pacman" ]; then
+            upgrade_cmd="sudo pacman -Syu"
+        fi
+    elif exists dnf; then
+        upgrade_cmd="sudo dnf upgrade"
+    elif exists apt && exists dpkg; then
+        upgrade_cmd="sudo apt upgrade"
+    elif exists apt-get && exists rpm; then
+        upgrade_cmd="sudo apt-get dist-upgrade"
+    elif exists zypper; then
+        upgrade_cmd="sudo zypper update"
+    elif exists apk; then
+        upgrade_cmd="doas apk upgrade"
+    elif exists xbps-install; then
+        upgrade_cmd="sudo xbps-install -Su"
+    elif exists eopkg; then
+        upgrade_cmd="sudo eopkg upgrade"
+    elif exists emerge; then
+        upgrade_cmd="sudo emerge -uDN @world"
+    elif exists slackpkg; then
+        upgrade_cmd="sudo slackpkg upgrade-all"
+    elif [ -n "$custom_upgrade_cmd" ]; then
+        upgrade_cmd="$custom_upgrade_cmd"
+    else
+        upgrade_cmd=""
+    fi
+}
+
+build_refresh_string() {
+    # Builds the shell commands to inject directly into the terminal emulator
+    if [ -n "$refresh_cmd" ]; then
+        refresh_string="$refresh_cmd"
+    else
+        refresh_string="pkill -USR1 -x tint2 2>/dev/null || true; "
+        refresh_string="${refresh_string} pkill -RTMIN+8 -x waybar 2>/dev/null || true; "
+        refresh_string="${refresh_string} pkill -RTMIN+4 -x sfwbar 2>/dev/null || true; "
+        refresh_string="${refresh_string} pkill -RTMIN+11 -x i3blocks 2>/dev/null || true; "
+        refresh_string="${refresh_string} command -v polybar-msg >/dev/null 2>&1 && polybar-msg cmd restart >/dev/null 2>&1 || true"
+    fi
+}
+
+do_upgrade() {
+    # Updating text persists until the status bar receives the refresh signal
+    case "$output" in
+        glyph) printf "󰂪\n" ;;
+        text)  printf "Updating..\n" ;;
+        icon)  printf "/usr/share/pmt2e/icons/arch-icon-notify.svg\n" ;;
+    esac
+
+    set_upgrade_cmd
+    build_refresh_string
+
+    if [ -n "$upgrade_cmd" ]; then
+        # The refresh string runs inside the terminal right before it closes
+        $terminal -e sh -c "$upgrade_cmd; printf '\nPress enter to exit... '; read dummy; $refresh_string"
+    else
+        die "No supported package manager found, and no custom upgrade_cmd provided in pmu.conf."
+    fi
+    exit 0
+}
+
+show_menu() {
+    case "$output" in
+        text)  flag="t" ;;
+        glyph) flag="f" ;;
+        icon)  flag="i" ;;
+    esac
+
+    createjgmenu \
+        "Check updates,$scriptname -c -$flag" \
+        "Show pending,$scriptname -n -$flag" \
+        "Update,$scriptname -u -$flag"
+}
+
+# -------------------------------------------------------------------
+# MAIN EXECUTION
+# -------------------------------------------------------------------
+
+case ${action} in
+    help)   show_help ;;
+    notify) do_notify ;;
+    upgrade) do_upgrade ;;
+    check)  do_check ;;
+    menu)   show_menu ;;
+esac
