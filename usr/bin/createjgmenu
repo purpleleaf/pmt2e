@@ -35,7 +35,7 @@ show_help() {
     printf '\n'
     printf '%s\n' 'Input Methods:'
     printf '%s\n' '  1. Arguments: "Label,cmd" "Label 2,cmd2"'
-    printf '%s\n' '  2. Pipe:     '
+    printf '%s\n' '  2. Pipe:      printf "Item,cmd\nItem2,cmd2" | createjgmenu'
     printf '%s\n' '  3. File:      -m menu.txt'
     printf '\n'
     exit 0
