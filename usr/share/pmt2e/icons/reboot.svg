@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns="http://www.w3.org/2000/svg"
+   width="64"
+   height="64"
+   viewBox="0 0 64 64">
+  
+  <path
+     d="M 52 32 A 20 20 0 1 1 32 12"
+     fill="none"
+     stroke="#ffffff"
+     stroke-width="8"
+     stroke-linecap="butt" />
+     
+  <polygon
+     points="26,2 52,12 26,22"
+     fill="#ffffff" />
+     
+</svg>
