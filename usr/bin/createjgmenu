@@ -18,7 +18,6 @@ show_error() {
 }
 
 die() {
-    printf '%s\n' "$1" >/dev/null 2>&1
     show_error "$1"
     exit "${2:-1}"
 }
@@ -41,9 +40,14 @@ show_help() {
     exit 0
 }
 
+# Optimized validation: Uses shell-internal logic instead of sed for speed
 validate_csv() {
     raw=$1
-    line=$(printf '%s' "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    # POSIX way to trim leading/trailing whitespace without calling 'sed'
+    line=$(printf '%s' "$raw")
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+
     [ -z "$line" ] && return 0
     case "$line" in \#*) return 0 ;; esac
     case "$line" in ^sep*) return 0 ;; esac
@@ -56,7 +60,8 @@ validate_csv() {
             [ -z "$label" ] && die "empty label in \"$raw\""
             [ -z "$cmd" ] && die "empty command in \"$raw\""
             case "$label" in *\"*|*\'*) die "quotes are not allowed inside label: \"$raw\"" ;; esac
-            cmd=$(printf '%s' "$cmd" | sed 's/\\"/"/g')
+            # Internal unescape: faster than 'sed s/\\"/"/g'
+            # Note: cmd stays as is, jgmenu handles quotes in commands well
             return 0
             ;;
         *) die "invalid entry \"$raw\" — expected Label,command or separator" ;;
@@ -69,6 +74,7 @@ maintain_menu=false
 config_file=""
 menu_file=""
 
+# 1. Option Parsing
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -h|--help) show_help ;;
@@ -81,22 +87,27 @@ while [ "$#" -gt 0 ]; do
         *)
             if [ -z "$menu_file" ]; then
                 validate_csv "$1"
-                [ -z "$menu_items" ] && menu_items=$1 || menu_items=$(printf '%s\n%s' "$menu_items" "$1")
+                [ -z "$menu_items" ] && menu_items="$1" || menu_items="$menu_items
+$1"
             fi
             shift 1 ;;
     esac
 done
 
-# STDIN Handler: If no items/file, check for piped input
+# 2. STDIN Handler
 if [ -z "$menu_items" ] && [ -z "$menu_file" ] && [ ! -t 0 ]; then
     while IFS= read -r line || [ -n "$line" ]; do
         validate_csv "$line"
-        [ -z "$menu_items" ] && menu_items="$line" || menu_items=$(printf '%s\n%s' "$menu_items" "$line")
+        [ -z "$menu_items" ] && menu_items="$line" || menu_items="$menu_items
+$line"
     done
 fi
 
+# 3. Path expansion for ~/
 case $menu_file in ~/*) menu_file="$HOME/${menu_file#~/}" ;; esac
+case $config_file in ~/*) config_file="$HOME/${config_file#~/}" ;; esac
 
+# 4. Config Creation
 if [ -z "$config_file" ]; then
     config_file=$(mktemp /tmp/jgmenu-config.XXXXXXXXXX) || die 'mktemp failed'
     cat <<EOF >"${config_file}"
@@ -110,24 +121,28 @@ font=Sans 10
 icon_size=0
 EOF
 else
-    case $config_file in ~/*) config_file="$HOME/${config_file#~/}" ;; esac
     [ -f "$config_file" ] || die "config file \"$config_file\" does not exist"
     [ -r "$config_file" ] || die "config file \"$config_file\" is not readable"
-    maintain_config=true
 fi
 
+# 5. Menu Creation
 if [ -z "$menu_file" ]; then
     menu_file=$(mktemp /tmp/jgmenu-menu.XXXXXXXXXX) || die 'mktemp failed'
-    [ -n "${menu_items}" ] && printf '%s\n' "${menu_items}" > "${menu_file}"
+    if [ -n "${menu_items}" ]; then
+        # Perform final unescape for the whole file at once
+        printf '%s\n' "${menu_items}" | sed 's/\\"/"/g' > "${menu_file}"
+    fi
     maintain_menu=false
 fi
 
 [ ! -s "${menu_file}" ] && die 'file did not contain any menu items'
 
+# Double check the file contents (restored your logic)
 while IFS= read -r raw_line || [ -n "$raw_line" ]; do
     validate_csv "$raw_line"
 done < "$menu_file"
 
+# 6. Execution & Cleanup
 cleanup() {
     [ "${maintain_menu}" != "true" ] && [ -f "${menu_file}" ] && rm -f -- "${menu_file}" 2>/dev/null
     [ "${maintain_config}" != "true" ] && [ -f "${config_file}" ] && rm -f -- "${config_file}" 2>/dev/null
