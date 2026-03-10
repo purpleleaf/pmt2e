@@ -19,6 +19,88 @@ Forked from [t2ec](https://github.com/nwg-piotr), pmt2e is written with these pu
 
 Many scripts show no changes related to the t2ec ones, excluding font glyphs, others are more  deeply modified and/or rewritten. Many other code snippets taken from other projects are used and credits are reported in every script description.
 
+## PMU (Poor Man Updater)
+
+`pmu` is a posix compliant update manager designed for lightweight Desktop Environment, intended for use as an **executor** or **custom module** for panels and bars.
+
+---
+
+### Features
+* **Native support** for `tint2`, `Waybar`, `Polybar`, and `sfwbar`.
+* **Checks system repositories** (Pacman) and AUR (via helpers).
+* **Flatpack support**
+* **Distro Agnostic:** While optimized for Arch Linux, it provides a robust override system to any other distribution via custom commands. It should work on BSD also.
+* **Flexible UI Output:**
+    * **Text:** Simple strings for classic bars.
+    * **Glyphs:** Nerd Font support for minimalist setups.
+    * **Icons:** Absolute path output for panel executors (like tint2).
+* **Interactive Management:** Built-in `jgmenu` and `yad` integration for listing packages and launching upgrades without touching the terminal manually.
+
+---
+
+### Requirements
+To use all features of the script, ensure the following are installed:
+* **System:** `sh` (POSIX compliant shell) and `pgrep`.
+* **Arch Linux:** `pacman-contrib` (provides the `checkupdates` binary).
+* **GUI Elements:** 
+    * **yad:** For the desktop notification window and the package list.
+    * **jgmenu:** For the interactive right-click or status menu.
+* **Fonts:**
+    * **Nerd Fonts:** Required if you use the Glyph output (`-f`).
+
+---
+
+### Installation
+Ensure the script is in your `$PATH` (e.g., `/usr/bin/pmu`) and has execution permissions:
+`chmod +x /usr/bin/pmu`
+
+### Configuration
+The script creates a configuration file at `~/.config/pmt2e/pmu.conf` on its first run. 
+* **Terminals:** It auto-detects common terminals, but you can force your preferred one (e.g., `terminal=kitty`).
+* **AUR:** If you use an AUR helper like `yay` or `paru`, set `arch_use_helper=true`.
+* **Customization:** If you are on a non-Arch system, you can define your own commands in this file.
+
+### Integration with Status Bars
+
+**For tint2 (Icon mode):**
+Set the executor command to `pmu -c [-i|-f|-t]` to return the appropriate package status [icon|text]. Assignto left or right click the command menu with pmu -m [-i|-f|t].
+
+**For Waybar (Text or Glyph mode):**
+Configure a custom module with the command `pmu -c -t` and a click action like `pmu -m [-i|-f|t]` for command menu.
+
+**For Polybar (Text or Glyph mode):**
+Use a `custom/script` module with `exec = pmu -c -f` and assign `click-left = pmu -m  -m [-i|-f|t]` for command menu.
+
+**For sfwbar (Icon or Glyph mode):**
+In your sfwbar config, use configure an `exec` module with Command = "pmu -c -i" and Action[LeftClick] = "pmu -m -i" .
+
+---
+
+### Usage Summary
+
+#### Choose one Output Format:
+* **-i (Icon):** Returns the path to a status icon.
+* **-t (Text):** Returns a simple string (e.g., `Upd: 12`).
+* **-f (Glyph):** Returns a Nerd Font icon (e.g., `󱆢`).
+
+#### Choose one Action:
+* **-c:** **Check** (Primary command for bars).
+* **-n:** **Notify** (Shows a list of pending updates in a window).
+* **-u:** **Upgrade** (Opens terminal and starts the system upgrade).
+* **-m:** **Menu** (Opens the interactive jgmenu).
+* **-p:** **Toggle Flatpak** (Enables or disables Flatpak checks).
+* **-e:** **Empty Cache** (Runs the package manager's cleaning utility).
+
+---
+
+### Overriding Commands (e.g. Debian/Ubuntu)
+If you are not using Arch Linux, you can make the script work by setting these variables in `~/.config/pmt2e/pmu.conf`:
+
+* **check_cmd:** `'apt list --upgradable 2>/dev/null | grep -c /'`
+* **upgrade_cmd:** `'sudo apt update && sudo apt upgrade'`
+* **clean_cmd:** `'sudo apt autoremove && sudo apt clean'`
+
+
 ##  Poor Man Weather - pmw
 
 pmw is an executor displaying an icon corresponding to  the current weather  in tint2. If invoked with the -n switch, through a mouse click  on the icon (setted in tint2 preferences), it display a notification showing current weather and the forecast for the next hours.
