@@ -2,7 +2,7 @@
 
 # Posix compliant script for Arch based systems.
 # It can also use custom commands to adapt to other distro.
-# It is designed for panels and bars like Tint2, Waybar, Polybar and SFWBar.
+# Designed for panels and bars like Tint2, Waybar, Polybar and SFWBar.
 # Authors: Max Franco <purpleleaf at ganoia.eu>
 # License: GPL3
 
