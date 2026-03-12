@@ -1,0 +1,348 @@
+#!/bin/sh
+# ==============================================================================
+# Script Name  : pmbattery
+# Description  : PMT2e Battery Executor - A lightweight monitor and configuration tool
+# Author       : purpleleaf
+# Credits      : Piotr Miller (nwg-piotr) - Original creator of the t2ec project
+# License      : GPL-3.0
+# Dependencies : acpi, yad, dunstify, jgmenu
+# ==============================================================================
+
+# --- Default Configuration ---
+CRIT_LEVEL=5
+NOTIFY_TIME_NORMAL=2500
+NOTIFY_TIME_CRIT=5000
+CRIT_SOUND="/usr/share/sounds/freedesktop/stereo/bell.oga"
+
+# --- Load User Configuration Safely ---
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
+CONFIG_FILE="$CONFIG_DIR/pmbattery.conf"
+
+if [ -f "$CONFIG_FILE" ] && [ -r "$CONFIG_FILE" ]; then
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+        # Clean quotes from loaded values
+        val="${val%\"}"; val="${val#\"}"
+        val="${val%\'}"; val="${val#\'}"
+
+        case "$key" in
+            CRIT_LEVEL)         CRIT_LEVEL="$val" ;;
+            NOTIFY_TIME_NORMAL) NOTIFY_TIME_NORMAL="$val" ;;
+            NOTIFY_TIME_CRIT)   NOTIFY_TIME_CRIT="$val" ;;
+            CRIT_SOUND)         CRIT_SOUND="$val" ;;
+        esac
+    done < "$CONFIG_FILE"
+fi
+
+# --- Global Variables ---
+scriptname=$(basename "$0")
+bat=$(acpi -b 2>/dev/null || echo "")
+
+# --- Utility Functions ---
+
+exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+show_dialog() {
+    yad --title="$2" \
+        --text="$1" \
+        --image="$3" \
+        --window-icon="$3" \
+        --borders=15 \
+        --button="Close:0"
+}
+
+die() {
+    if [ "$1" = "-g" ]; then
+        shift
+        if exists yad; then
+            show_dialog "$*" "Error" "dialog-error"
+        else
+            printf '%s\n' "$*" 1>&2
+        fi
+    else
+        printf '%s\n' "$*" 1>&2
+    fi
+    exit 1
+}
+
+show_help() {
+    cat << EOF
+Usage: $scriptname [OPTION]
+
+PMT2e Battery Executor - A lightweight battery monitor for panels.
+
+Options:
+  -n    Show desktop notification based on current battery level
+  -t    Print short battery text (e.g., 85%)
+  -T    Print extended battery text with remaining time (e.g., 85% (01:20))
+  -i    Print the path to the current battery icon (SVG)
+  -f    Print the battery font glyph
+  -m    Generate jgmenu formatted output for context menus
+  -d    Show detailed battery statistics dialog (Health, Cycles, Power Draw)
+  -c    Open the configuration GUI to set thresholds and timeouts
+  -h    Show this help message and exit
+
+Configuration:
+  Settings are saved to: $CONFIG_FILE
+EOF
+}
+
+# --- Data Extraction Functions ---
+
+get_battery_stats() {
+    if [ -z "$bat" ]; then
+        return 1
+    fi
+
+    state=$(echo "$bat" | tr -s ' ' | cut -d ' ' -f 3)
+
+    # Check if state is "Not charging" vs standard states
+    if [ "$state" = "Not" ]; then
+        level=$(echo "$bat" | tr -s ' ' | cut -d ' ' -f 5)
+    else
+        level=$(echo "$bat" | tr -s ' ' | cut -d ' ' -f 4)
+    fi
+
+    # Strip trailing commas or percent signs
+    level=${level%?}
+    if [ "${level%?}" != "${level}" ]; then
+        level=${level%?}
+    fi
+
+    state_clean=${state%,}
+    if [ -z "$state_clean" ]; then
+        state_clean="Unknown"
+    fi
+
+    time_info=$(echo "$bat" | cut -d ',' -f 3)
+    time_info=${time_info# }
+}
+
+get_power_draw() {
+    power_mw=0
+    bat_dir=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -n 1)
+
+    if [ -z "$bat_dir" ]; then
+        power_draw="Unknown"
+        return 1
+    fi
+
+    # Determine power draw based on available sysfs files
+    if [ -f "$bat_dir/power_now" ]; then
+        p_raw=$(cat "$bat_dir/power_now")
+        if [ "$p_raw" -gt 100000 ]; then
+            power_mw=$((p_raw / 1000))
+        else
+            power_mw=$p_raw
+        fi
+
+    elif [ -f "$bat_dir/current_now" ]; then
+        c_raw=$(cat "$bat_dir/current_now")
+        v_raw=0
+
+        if [ -f "$bat_dir/voltage_now" ]; then
+            v_raw=$(cat "$bat_dir/voltage_now")
+        else
+            v_raw=$(cat "$bat_dir/voltage_min_design")
+        fi
+
+        if [ -n "$c_raw" ] && [ -n "$v_raw" ] && [ "$c_raw" -gt 0 ] && [ "$v_raw" -gt 0 ]; then
+            # Handle micro vs milli units
+            if [ "$v_raw" -gt 100000 ]; then
+                c_ma=$((c_raw / 1000))
+                v_mv=$((v_raw / 1000))
+            else
+                c_ma=$c_raw
+                v_mv=$v_raw
+            fi
+            power_mw=$((c_ma * v_mv / 1000))
+        fi
+    fi
+
+    # Format the output into Watts
+    if [ "$power_mw" -gt 0 ]; then
+        w=$((power_mw / 1000))
+        d1=$(( (power_mw % 1000) / 100 ))
+        d2=$(( (power_mw % 100) / 10 ))
+
+        if [ "$w" -eq 0 ] && [ "$d1" -eq 0 ]; then
+            power_draw="0.0${d2} W"
+        else
+            power_draw="${w}.${d1} W"
+        fi
+    else
+        power_draw="Unknown"
+    fi
+}
+
+# --- Main Logic / Argument Parsing ---
+
+while getopts ":nhmtTfidc" opt; do
+    case ${opt} in
+        n) action=notification ;;
+        t) action=text ;;
+        T) action=text_extended ;;
+        f) action=glyph ;;
+        i) action=icon ;;
+        m) action=menu ;;
+        d) action=details ;;
+        c) action=config ;;
+        h) show_help; exit 0 ;;
+        *)
+            printf "%s: unrecognised option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$action" ]; then
+    printf "%s: missing option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
+    exit 1
+fi
+
+# Load battery stats unless we are just showing config/help
+case $action in
+    config|help)
+        ;;
+    *)
+        get_battery_stats || true
+        ;;
+esac
+
+# --- Action Execution ---
+
+case ${action} in
+    config)
+        mkdir -p "$CONFIG_DIR"
+
+        # YAD fills columns left-to-right, row-by-row.
+        # 4 Inputs followed by 4 Buttons creates the 2-column layout correctly.
+        new_configs=$(yad --title="PM Battery configuration" \
+            --window-icon="dialog-information" --borders=15 \
+            --form \
+            --columns=2 \
+            --field="Notification Battery Level (%):NUM" "$CRIT_LEVEL"'!1..100!1!0' \
+            --field="Normal Notify (ms):NUM" "$NOTIFY_TIME_NORMAL"'!500..10000!100!0' \
+            --field="Critical Notify (ms):NUM" "$NOTIFY_TIME_CRIT"'!500..10000!100!0' \
+            --field="Alarm Sound:FL" "$CRIT_SOUND" \
+            --field='!gtk-help!Battery Notification threshold':BTN "yad --info --title='Info' --text='Sets at this percentage the threshold for low battery notification alerts.'" \
+            --field='!gtk-help!Duration of standard popups':BTN "yad --info --title='Info' --text='How long standard notifications stay on screen. (1000ms = 1s)'" \
+            --field='!gtk-help!Duration of low battery popups':BTN "yad --info --title='Info' --text='How long critical notifications stay on screen. (1000ms = 1s)'" \
+            --field='!gtk-help!Select the audio file for the alarm':BTN "yad --info --title='Info' --text='Choose a .oga or .wav file to play when battery is low.'")
+
+        if [ -n "$new_configs" ]; then
+            # BTN fields output nothing. YAD will only output the 4 real values: val1|val2|val3|val4|
+            # The dummy '_' catches the trailing empty pipe field.
+            IFS='|' read -r c_lvl t_norm t_crit s_path _ <<EOF
+$new_configs
+EOF
+            {
+              echo "CRIT_LEVEL=$c_lvl"
+              echo "NOTIFY_TIME_NORMAL=$t_norm"
+              echo "NOTIFY_TIME_CRIT=$t_crit"
+              echo "CRIT_SOUND='$s_path'"
+            } > "$CONFIG_FILE"
+
+            dunstify -t 2000 "Battery Config" "Settings updated."
+        fi
+        ;;
+
+    details)
+        get_power_draw
+        bat_dir=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -n 1)
+        health="Unknown"
+        cycles="Unknown"
+
+        if [ -n "$bat_dir" ]; then
+            if [ -f "$bat_dir/energy_full" ]; then
+                f=$(cat "$bat_dir/energy_full")
+                d=$(cat "$bat_dir/energy_full_design")
+            elif [ -f "$bat_dir/charge_full" ]; then
+                f=$(cat "$bat_dir/charge_full")
+                d=$(cat "$bat_dir/charge_full_design")
+            fi
+
+            if [ -n "$f" ] && [ -n "$d" ] && [ "$d" -gt 0 ]; then
+                health=$(( (f * 100) / d ))"%"
+            fi
+
+            if [ -f "$bat_dir/cycle_count" ]; then
+                cycles=$(cat "$bat_dir/cycle_count")
+            fi
+        fi
+
+        info_text="<b>Status</b>\nState: $state_clean\nLevel: $level%\nDraw: $power_draw\nTime: $time_info\n\n<b>Health</b>\nCapacity: $health\nCycles: $cycles"
+        show_dialog "$info_text" "Battery Details" "battery"
+        ;;
+
+    menu)
+        printf "Battery Details,%s -d\nConfiguration,%s -c\n" \
+            "$scriptname" "$scriptname" | createjgmenu
+        ;;
+
+    text)
+        if [ -z "$bat" ]; then
+            echo "N/A"
+        else
+            echo "${level}%"
+        fi
+        ;;
+
+    text_extended)
+        if [ -z "$bat" ]; then
+            echo "N/A"
+        elif [ -n "$time_info" ]; then
+            echo "${level}% ($time_info)"
+        else
+            echo "${level}%"
+        fi
+        ;;
+
+    glyph)
+        if [ -z "$bat" ]; then
+            echo "󰂑" # Unknown/Missing
+        elif [ "$state_clean" = "Charging" ]; then
+            echo "󰂄" # Charging
+        else
+            if [ "$level" -ge 90 ]; then echo "󰁹"
+            elif [ "$level" -ge 80 ]; then echo "󰂂"
+            elif [ "$level" -ge 70 ]; then echo "󰂁"
+            elif [ "$level" -ge 60 ]; then echo "󰂀"
+            elif [ "$level" -ge 50 ]; then echo "󰁿"
+            elif [ "$level" -ge 40 ]; then echo "󰁾"
+            elif [ "$level" -ge 30 ]; then echo "󰁽"
+            elif [ "$level" -ge 20 ]; then echo "󰁼"
+            elif [ "$level" -ge 10 ]; then echo "󰁻"
+            else echo "󰂎" # Critical/Empty
+            fi
+        fi
+        ;;
+
+    icon)
+        if [ -z "$bat" ]; then
+            echo "battery-missing-symbolic"
+        elif [ "$state_clean" = "Charging" ]; then
+            echo "battery-good-charging-symbolic"
+        elif [ "$level" -le "$CRIT_LEVEL" ]; then
+            echo "battery-empty-symbolic"
+        else
+            echo "battery-good-symbolic"
+        fi
+        ;;
+
+    notification)
+        if [ -n "$bat" ]; then
+            if [ "$level" -le "$CRIT_LEVEL" ]; then
+                dunstify -u critical "$bat"
+            else
+                dunstify -u normal "$bat"
+            fi
+        fi
+        ;;
+
+    *)
+        printf "%s: unrecognised option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
+        exit 1
+        ;;
+esac
