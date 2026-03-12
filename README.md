@@ -175,9 +175,51 @@ Dependencies: alsa-utils dunst.
 
 ### Installation
 Ensure the script is in your `$PATH` (e.g., `/usr/bin/pmbattery`) and has execution permissions:
-```
-chmod +x /usr/bin/pmbattery
-```
+`chmod +x /usr/bin/pmbattery`
+
+### Configuration
+The script creates a configuration file at `~/.config/pmt2e/pmbattery.conf` on its first run or when settings are saved. 
+* **GUI Configurator:** You do not need to edit the file manually. Simply configure your bar/panel to run `pmbattery -m` on left or right click to open the menu, or `pmbattery -c` to open the settings window directly.
+* **Thresholds:** You can set the Critical Level percentage, standard notification duration, and critical notification duration.
+* **Alarms:** Allows you to define the absolute path to a `.oga` or `.wav` file to play when the battery hits the critical threshold.
+
+---
+
+### Integration with Status Bars
+
+Because `pmbattery` uses single, exclusive flags, you simply assign one flag to the bar's display output and different flags to your mouse clicks.
+
+**For tint2:**
+Set the executor command to `pmbattery -i` (for icons) or `pmbattery -t` (for text). Assign the left or right click command to `pmbattery -m`.
+
+**For Waybar:**
+Configure a custom module with the command `pmbattery -t` and a click action like `pmbattery -m` for the command menu.
+
+**For Polybar:**
+Use a `custom/script` module with `exec = pmbattery -f` and assign `click-left = pmbattery -m` for the command menu.
+
+**For sfwbar:**
+In your sfwbar config, configure an `exec` module with `Command = "pmbattery -i"` and `Action[LeftClick] = "pmbattery -m"`.
+
+---
+
+### Usage Summary
+
+`pmbattery` accepts a single option per execution.
+
+#### Panel Output Flags (For continuous display)
+* **`-i`** : Print the path to the current battery icon (SVG) or icon name.
+* **`-f`** : Print a Nerd Font glyph based on current charge and state.
+* **`-t`** : Print a simple text string (e.g., `85%`).
+* **`-T`** : Print an extended text string including remaining time (e.g., `85% (01:20)`).
+
+#### Interactive Flags (For click events and shortcuts)
+* **`-m`** : Open the interactive `jgmenu` (Quick access to Details and Settings).
+* **`-d`** : Show a detailed `yad` dialog with health, cycles, and live power draw.
+* **`-c`** : Open the GUI configuration window to adjust thresholds and sounds.
+* **`-n`** : Trigger a `dunstify` desktop notification of the current battery state.
+* **`-a`** : Show the About dialog.
+* **`-h`** : Show the help message in the terminal.
 ## yad-box  volume-icon
 
 A slider changing the volume level, nothing more, nothing less.
@@ -186,7 +228,6 @@ A slider changing the volume level, nothing more, nothing less.
 
 A simple utility to create jgmenu. Used in  other pmt2e scripts and useful if you want attach your own menus to the pmt2e icons.
 
-```bash
 Usage: /home/max/.local/bin/createjgmenu -c config_file | -m menu_file | -h | list of command to feed jgmenu
 
   -h Show this help message and exit.
@@ -195,13 +236,7 @@ Usage: /home/max/.local/bin/createjgmenu -c config_file | -m menu_file | -h | li
 
 If -m is provided any other eventual argument passed to build the menu will be ignored.
 Menu items must be passed in the form "Menu name,/command/to/execute.
-```
+
 You could directly use jgmenu --vsimple, but in my opinion createjgmenu is more intuitive , if  executed without config file produce an already integrated tint2 menu and menu items  can be passed to command line in a simpler way.
 
 Dependencies: jgmenu.
-
-
-
-
-
-
