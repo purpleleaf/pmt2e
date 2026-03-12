@@ -175,9 +175,9 @@ Dependencies: alsa-utils dunst.
 
 ### Installation
 Ensure the script is in your `$PATH` (e.g., `/usr/bin/pmbattery`) and has execution permissions:
-```sh
+```
 chmod +x /usr/bin/pmbattery
-
+```
 ## yad-box  volume-icon
 
 A slider changing the volume level, nothing more, nothing less.
