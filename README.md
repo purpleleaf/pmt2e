@@ -144,22 +144,81 @@ If -h is selected no other option is required.
 
 Dependencies: alsa-utils dunst.
 
-##  battery-icon
+## pmbattery (PoorMan Battery)
 
-battery-icon display an icon  as tint2 executor showing current battery level.  Command can be linked to mouse event in executor, to show a notification. If battery level goes under 5% an alert sound is played.
+`pmbattery` is a POSIX compliant battery monitor designed for lightweight Desktop Environments, intended for use as an **executor** or **custom module** for panels and bars.
 
-Usage: battery-icon [ -h | -n | -m | -t | -f | -i ]
+---
 
-  -h, Show this help message and exit.
-  -n, Show notification.
-  -m, Show jgmenu.
-  -t, show only text as tint2 executor output.
-  -f, show a font gyph as tint2 executor output.
-  -i, show an icon as tint2 executor output.
-If multiple arguments are provided, only the first one will considered
+### Features
+* **Native support** for `tint2`, `Waybar`, `Polybar`, and `sfwbar`.
+* **Alerts:**  `dunstify` notification popups and audio alarms when the battery reaches a critical level.
+* **Flexible UI Output:**
+    * **Text:** Simple strings (e.g., `85%`) or extended strings with remaining time.
+    * **Glyphs:** Nerd Font support for minimalist setups.
+    * **Icons:** Absolute path for customized icons or icon name for configured icon theme.
+* **Menu:** Onclick menu to access `yad` GUI for configuring alerts and detailed hardware statistics dialog.
 
-Dependencies: acpi ogg123 (vorbis-tools) dunst.
+---
 
+### Requirements
+* **System:** `sh` (POSIX compliant shell) and `acpi` (used for state and time parsing).
+* **Audio:** `ogg123` (usually provided by the `vorbis-tools` package) to play the critical battery alarm.
+* **GUI:** * **yad:** For visual configuration settings and the detailed statistics dialog.
+    * **jgmenu:** For interactive right-click context menu.
+    * **dunstify:** (from `dunst`) For sending normal and critical desktop notifications.
+* **Fonts:**
+    * **Nerd Fonts:** Required if you use the Glyph output (`-f`).
+
+---
+
+### Installation
+Ensure the script is in your `$PATH` (e.g., `/usr/bin/pmbattery`) and has execution permissions:
+`chmod +x /usr/bin/pmbattery`
+
+### Configuration
+The script creates a configuration file at `~/.config/pmt2e/pmbattery.conf` on its first run or when settings are saved. 
+* **GUI Configurator:** You do not need to edit the file manually. Simply configure you bar/panel  to run `pmbattery -c`  on left or right click to open the menu.
+* **Thresholds:** You can set the Critical Level percentage, standard notification duration, and critical notification duration.
+* **Alarms:** Allows you to define the absolute path to a `.oga` or `.wav` file to play when the battery hits the critical threshold.
+
+---
+
+### Integration with Status Bars
+
+Because `pmbattery` uses single, exclusive flags, you simply assign one flag to the bar's display output and different flags to your mouse clicks.
+
+**For tint2:**
+Set the executor command to `pmbattery -i` (for icons) or `pmbattery -t` (for text). Assign the left or right click command to `pmbattery -m`.
+
+**For Waybar:**
+Configure a custom module with the command `pmbattery -t` and a click action like `pmbattery -m` for the command menu.
+
+**For Polybar:**
+Use a `custom/script` module with `exec = pmbattery -f` and assign `click-left = pmbattery -m` for the command menu.
+
+**For sfwbar:**
+In your sfwbar config, configure an `exec` module with `Command = "pmbattery -i"` and `Action[LeftClick] = "pmbattery -m"`.
+
+---
+
+### Usage Summary
+
+`pmbattery` accepts a single option per execution.
+
+#### Panel Output Flags (For continuous display)
+* **`-i`** : Print the path to the current battery icon (SVG).
+* **`-f`** : Print a Nerd Font glyph based on current charge and state.
+* **`-t`** : Print a simple text string (e.g., `85%`).
+* **`-T`** : Print an extended text string including remaining time (e.g., `85% (01:20)`).
+
+#### Interactive Flags (For click events and shortcuts)
+* **`-m`** : Open the interactive `jgmenu` (Quick access to Details and Settings).
+* **`-d`** : Show a detailed `yad` dialog with health, cycles, and live power draw.
+* **`-c`** : Open the GUI configuration window to adjust thresholds and sounds.
+* **`-n`** : Trigger a `dunstify` desktop notification of the current battery state.
+* **`-a`** : Show the About dialog.
+* **`-h`** : Show the help message in the terminal.
 ## yad-box  volume-icon
 
 A slider changing the volume level, nothing more, nothing less.
