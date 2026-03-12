@@ -178,7 +178,6 @@ Ensure the script is in your `$PATH` (e.g., `/usr/bin/pmbattery`) and has execut
 ```sh
 chmod +x /usr/bin/pmbattery
 
-
 ## yad-box  volume-icon
 
 A slider changing the volume level, nothing more, nothing less.
