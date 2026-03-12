@@ -1,0 +1,329 @@
+#!/bin/sh
+# ==============================================================================
+# Script Name  : pmvolume
+# Description  : PMT2e Volume Executor - A lightweight ALSA volume monitor
+# Author       : purpleleaf
+# Credits      : Piotr Miller (nwg-piotr) - Original creator of the t2ec project
+# License      : GPL-3.0
+# Dependencies : alsa-utils (amixer), yad, jgmenu, dunstify (optional)
+# ==============================================================================
+
+# --- Default Configuration ---
+MIXER_CHANNEL="Auto"
+VOL_STEP=5
+TERM_EMU=""
+
+# --- Load User Configuration Safely ---
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
+CONFIG_FILE="$CONFIG_DIR/pmvolume.conf"
+
+if [ -f "$CONFIG_FILE" ] && [ -r "$CONFIG_FILE" ]; then
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+        val="${val%\"}"; val="${val#\"}"
+        val="${val%\'}"; val="${val#\'}"
+        case "$key" in
+            MIXER_CHANNEL) MIXER_CHANNEL="$val" ;;
+            VOL_STEP)      VOL_STEP="$val" ;;
+            TERM_EMU)      TERM_EMU="$val" ;;
+        esac
+    done < "$CONFIG_FILE"
+fi
+
+# --- Global Variables ---
+scriptname=$(basename "$0")
+action="text" # Default action if no arguments are passed
+input_vol=""
+
+# --- Utility Functions ---
+
+exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+show_dialog() {
+    yad --title="$2" \
+        --text="$1" \
+        --image="$3" \
+        --window-icon="$3" \
+        --borders=15 \
+        --button="Close:0"
+}
+
+die() {
+    if [ "$1" = "-g" ]; then
+        shift
+        if exists yad; then
+            show_dialog "$*" "Error" "dialog-error"
+        else
+            printf '%s\n' "$*" 1>&2
+        fi
+    else
+        printf '%s\n' "$*" 1>&2
+    fi
+    exit 1
+}
+
+show_help() {
+    cat << EOF
+Usage: $scriptname [OPTION]
+
+PMT2e Volume Executor - A lightweight ALSA volume monitor for panels.
+Defaults to '-t' (text output) if no options are provided.
+
+Options:
+  -t      Print volume text (e.g., 50% or Muted)
+  -i      Print the path to the current volume icon (SVG)
+  -f      Print the volume Nerd Font glyph
+  -u      Increase volume by the configured step
+  -d      Decrease volume by the configured step
+  -x      Toggle mute state
+  -s NUM  Set volume to specific number (0-100)
+  -m      Generate jgmenu formatted output for context menus
+  -M      Open alsamixer in the configured terminal
+  -c      Open the configuration GUI
+  -h      Show this help message and exit
+EOF
+}
+
+# --- ALSA Parsing (BusyBox/BSD Compatible) ---
+
+get_channel() {
+    if [ "$MIXER_CHANNEL" = "Auto" ] || [ -z "$MIXER_CHANNEL" ]; then
+        MIXER_CHANNEL=$(
+            amixer scontrols |
+            while IFS= read -r ctl; do
+                case "$ctl" in
+                    *"'"*"'"*)
+                        name=$(printf '%s\n' "$ctl" | sed "s/.*'\(.*\)'.*/\1/")
+                        if amixer get "$name" | grep -q '%'; then
+                            printf '%s\n' "$name"
+                            break
+                        fi
+                        ;;
+                esac
+            done
+        )
+    fi
+    [ -n "$MIXER_CHANNEL" ] || die -g "No volume control available on this device."
+}
+
+get_volume() {
+    vol_out=$(
+        amixer get "$MIXER_CHANNEL" |
+        while IFS= read -r line; do
+            case "$line" in
+                *%*)
+                    set -- $(printf '%s\n' "$line" | tr '[]' ' ')
+                    for field in "$@"; do
+                        case "$field" in
+                            *%)
+                                printf '%s\n' "${field%%%}"
+                                return 0
+                                ;;
+                        esac
+                    done
+                    ;;
+            esac
+        done
+    )
+
+    case "$vol_out" in
+        ''|*[!0-9]*) die -g "Failed to read numeric volume from control: $MIXER_CHANNEL" ;;
+        *) vol="$vol_out" ;;
+    esac
+
+    if amixer get "$MIXER_CHANNEL" | grep '%' | grep -q off; then
+        state="off"
+    else
+        state="on"
+    fi
+}
+
+# --- Notification Logic ---
+
+send_notification() {
+    if exists dunstify; then
+        if [ "$state" = "off" ]; then
+            dunstify -t 1000 -h string:x-dunst-stack-tag:volume -u normal "󰝟 Muted"
+        else
+            if [ "$vol" -ge 90 ]; then g="󰕾"
+            elif [ "$vol" -ge 33 ]; then g="󰖀"
+            else g="󰕿"
+            fi
+            dunstify -t 1000 -h string:x-dunst-stack-tag:volume -u normal "${g} ${vol}%" -h int:value:"$vol"
+        fi
+    fi
+}
+
+# --- Main Logic / Argument Parsing ---
+
+if [ $# -gt 0 ]; then
+    action=""
+    while getopts ":tfhiudxmMcs:" opt; do
+        case ${opt} in
+            t) action=text ;;
+            f) action=glyph ;;
+            i) action=icon ;;
+            u) action=vol_up ;;
+            d) action=vol_down ;;
+            x) action=mute_toggle ;;
+            m) action=menu ;;
+            M) action=open_mixer ;;
+            c) action=config ;;
+            s)
+                action=set_vol
+                case "$OPTARG" in
+                    ''|*[!0-9]*) die "Error: -s argument must be a number 0-100" ;;
+                    *) [ "$OPTARG" -ge 0 ] && [ "$OPTARG" -le 100 ] && input_vol="$OPTARG" || die "Error: -s must be 0-100" ;;
+                esac
+                ;;
+            h) show_help; exit 0 ;;
+            *)
+                printf "%s: unrecognised option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
+                exit 1
+                ;;
+        esac
+    done
+fi
+
+if [ -z "$action" ]; then
+    printf "%s: missing valid option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
+    exit 1
+fi
+
+exists amixer || die -g "amixer not found; ALSA tools required."
+
+# Load volume stats unless we are just showing config/help
+case $action in
+    config|help) ;;
+    *) get_channel; get_volume ;;
+esac
+
+# --- Action Execution ---
+
+case ${action} in
+config)
+        mkdir -p "$CONFIG_DIR"
+
+        # Loop to allow validation of the terminal emulator
+        while true; do
+            # 3 Inputs grouped first, followed by 3 Buttons grouped second.
+            # This forces the layout: Values in Column 1, Help in Column 2.
+            new_configs=$(yad --title="PM Volume configuration" \
+                --window-icon="multimedia-volume-control" \
+                --form \
+                --columns=2 \
+                --field="ALSA Channel:" "$MIXER_CHANNEL" \
+                --field="Volume Step (%):NUM" "$VOL_STEP"'!1..100!1!0' \
+                --field="Terminal Emulator:" "$TERM_EMU" \
+                --field='!gtk-help!ALSA Channel':BTN "yad --info --title='Info' --borders=15 --text='Leave as Auto to detect automatically, or set to Master, PCM, etc.'" \
+                --field='!gtk-help!Volume Step Size':BTN "yad --info --title='Info' --borders=15 --text='How much the volume changes when using the up/down commands.'" \
+                --field='!gtk-help!Terminal Emulator':BTN "yad --info --title='Info' --borders=15 --text='The terminal command used to launch alsamixer (e.g., alacritty, xterm, kitty).'")
+
+            # Exit loop if user canceled or closed window
+            if [ -z "$new_configs" ]; then
+                break
+            fi
+
+            # Terminal is perfectly mapped to the 3rd variable!
+            IFS='|' read -r ch_name v_step t_emu _ <<EOF
+$new_configs
+EOF
+
+            # "Due Check": Verify terminal exists
+            if [ -n "$t_emu" ] && ! exists "$t_emu"; then
+                yad --title="Invalid Terminal" \
+                    --text="The terminal '$t_emu' was not found in your system PATH.\nPlease enter a valid terminal command." \
+                    --image="dialog-error" \
+                    --borders=15 \
+                    --button="Try Again:0"
+                continue
+            fi
+
+            # Save if everything passes
+            {
+              echo "MIXER_CHANNEL='$ch_name'"
+              echo "VOL_STEP=$v_step"
+              echo "TERM_EMU='$t_emu'"
+            } > "$CONFIG_FILE"
+            break
+        done
+        ;;
+    open_mixer)
+        if [ -z "$TERM_EMU" ] || ! exists "$TERM_EMU"; then
+            yad --title="Missing Terminal" \
+                --text="No valid terminal emulator configured.\nPlease set one to open alsamixer." \
+                --window-icon="dialog-warning" \
+                --image="dialog-warning" \
+                --borders=15 \
+                --button="Settings:0" --button="Cancel:1"
+
+            # If they clicked Settings (0), open the config block
+            if [ $? -eq 0 ]; then
+                $0 -c
+            fi
+            exit 0
+        fi
+
+        # Standard X11/Wayland flag for executing commands in a terminal is -e
+        $TERM_EMU -e alsamixer &
+        ;;
+
+    menu)
+        printf "Terminal Mixer,%s -M\nConfiguration,%s -c\n" \
+            "$scriptname" "$scriptname" | createjgmenu
+        ;;
+
+    set_vol)
+        amixer sset "$MIXER_CHANNEL" "${input_vol}%" >/dev/null 2>&1
+        get_volume; send_notification
+        ;;
+
+    vol_up)
+        if [ "$state" = "off" ]; then amixer sset "$MIXER_CHANNEL" toggle >/dev/null 2>&1; fi
+        amixer sset "$MIXER_CHANNEL" "${VOL_STEP}%+" >/dev/null 2>&1
+        get_volume; send_notification
+        ;;
+
+    vol_down)
+        if [ "$state" = "off" ]; then amixer sset "$MIXER_CHANNEL" toggle >/dev/null 2>&1; fi
+        amixer sset "$MIXER_CHANNEL" "${VOL_STEP}%-" >/dev/null 2>&1
+        get_volume; send_notification
+        ;;
+
+    mute_toggle)
+        amixer sset "$MIXER_CHANNEL" toggle >/dev/null 2>&1
+        get_volume; send_notification
+        ;;
+
+    text)
+        if [ "$state" = "off" ]; then
+            echo "Muted"
+        else
+            echo "${vol}%"
+        fi
+        ;;
+
+    glyph)
+        if [ "$state" = "off" ]; then
+            echo "󰝟"
+        elif [ "$vol" -ge 90 ]; then echo "󰕾"
+        elif [ "$vol" -ge 33 ]; then echo "󰖀"
+        else echo "󰕿"
+        fi
+        ;;
+
+    icon)
+        if [ "$state" = "off" ] || [ "$vol" -eq 0 ]; then
+            echo "audio-volume-muted-symbolic"
+        elif [ "$vol" -ge 70 ]; then echo "audio-volume-high-symbolic"
+        elif [ "$vol" -ge 30 ]; then echo "audio-volume-medium-symbolic"
+        else echo "audio-volume-low-symbolic"
+        fi
+        ;;
+
+    *)
+        printf "%s: unrecognised option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
+        exit 1
+        ;;
+esac
