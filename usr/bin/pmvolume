@@ -40,8 +40,8 @@ input_vol=""
 
 # --- Utility Functions ---
 
-exists() { 
-    command -v "$1" >/dev/null 2>&1 
+exists() {
+    command -v "$1" >/dev/null 2>&1
 }
 
 show_dialog() {
@@ -151,15 +151,27 @@ send_notification() {
         if [ "$state" = "off" ]; then
             dunstify -t 1000 -h string:x-dunst-stack-tag:volume -i audio-volume-muted-symbolic -u normal "Volume Muted"
         else
-            if [ "$vol" -ge 70 ]; then 
+            if [ "$vol" -ge 70 ]; then
                 icon="audio-volume-high-symbolic"
-            elif [ "$vol" -ge 30 ]; then 
+            elif [ "$vol" -ge 30 ]; then
                 icon="audio-volume-medium-symbolic"
-            else 
+            else
                 icon="audio-volume-low-symbolic"
             fi
             dunstify -t 1000 -h string:x-dunst-stack-tag:volume -i "$icon" -h int:value:"$vol" -u normal "Volume: ${vol}%"
         fi
+    fi
+}
+
+broadcast_refresh() {
+    # Check if Waybar is running before signaling
+    if pgrep -x "waybar" >/dev/null; then
+        pkill -RTMIN+9 waybar
+    fi
+
+    # Check if sfwbar is running before signaling
+    if pgrep -x "sfwbar" >/dev/null; then
+        pkill -RTMIN+5 sfwbar
     fi
 }
 
@@ -179,7 +191,7 @@ if [ $# -gt 0 ]; then
             m) action=menu ;;
             M) action=open_mixer ;;
             c) action=config ;;
-            s) 
+            s)
                 action=set_vol
                 case "$OPTARG" in
                     ''|*[!0-9]*) die "Error: -s argument must be a number 0-100" ;;
@@ -187,13 +199,13 @@ if [ $# -gt 0 ]; then
                 esac
                 ;;
             h) show_help; exit 0 ;;
-            :) 
+            :)
                 printf "%s: option -%s requires an argument (0-100).\n" "$scriptname" "$OPTARG" >&2
-                exit 1 
+                exit 1
                 ;;
-            \?|*) 
+            \?|*)
                 printf "%s: unrecognised option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
-                exit 1 
+                exit 1
                 ;;
         esac
     done
@@ -207,9 +219,9 @@ fi
 exists amixer || die -g "amixer not found; ALSA tools required."
 
 # Bypass ALSA volume querying if we are just opening a GUI
-case $action in 
-    config|help|select_card) ;; 
-    *) get_channel; get_volume ;; 
+case $action in
+    config|help|select_card) ;;
+    *) get_channel; get_volume ;;
 esac
 
 # --- Action Execution ---
@@ -217,12 +229,12 @@ esac
 case ${action} in
     config)
         mkdir -p "$CONFIG_DIR"
-        
+
         while true; do
             # Build ALSA dropdown
             combo_list="$MIXER_CHANNEL"
             [ "$MIXER_CHANNEL" != "Auto" ] && combo_list="${combo_list}!Auto"
-            
+
             extra_controls=$(amixer scontrols 2>/dev/null | sed -n "s/.*'\(.*\)'.*/\1/p" | while read -r c; do
                 [ "$c" != "$MIXER_CHANNEL" ] && printf "!%s" "$c"
             done)
@@ -276,7 +288,7 @@ EOF
                 t_emu=""
             fi
 
-            { 
+            {
               echo "MIXER_CHANNEL='$ch_name'"
               echo "VOL_STEP=$v_step"
               echo "MIXER_APP='$m_app'"
@@ -299,23 +311,23 @@ EOF
                 s = index($0, "["); e = index($0, "]");
                 id = substr($0, s + 1, e - s - 1);
                 gsub(/^[ \t]+|[ \t]+$/, "", id);
-                
+
                 idx = index($0, "]: ");
                 driver_raw = substr($0, idx + 3);
                 split(driver_raw, d_arr, " - ");
                 driver = d_arr[1];
                 gsub(/^[ \t]+|[ \t]+$/, "", driver);
-                
+
                 getline; desc = $0;
                 gsub(/^[ \t]+|[ \t]+$/, "", desc);
                 sub(/ at .*/, "", desc);
                 gsub(/[\^|\[\]]/, "", desc);
-                
+
                 if (seen[id] == 1) next;
                 seen[id] = 1;
-                
+
                 item = driver " - " desc " [" id "]";
-                
+
                 if (id == cur) {
                     default_str = item;
                 } else {
@@ -381,44 +393,44 @@ EOF
                 --image="dialog-warning" \
                 --borders=15 \
                 --button="Settings:0" --button="Cancel:1"
-            
+
             if [ $? -eq 0 ]; then
                 $0 -c
             fi
             exit 0
         fi
-        
+
         $TERM_EMU -e $MIXER_APP &
         ;;
 
-    menu) 
+    menu)
         printf "Select Sound Card,%s -S\nOpen Mixer,%s -M\nConfiguration,%s -c\n" \
-            "$scriptname" "$scriptname" "$scriptname" | createjgmenu 
+            "$scriptname" "$scriptname" "$scriptname" | createjgmenu
         ;;
 
     set_vol)
         amixer sset "$MIXER_CHANNEL" "${input_vol}%" >/dev/null 2>&1
-        get_volume; send_notification
+        get_volume; send_notification; broadcast_refresh
         ;;
-    
+
     vol_up)
         if [ "$state" = "off" ]; then amixer sset "$MIXER_CHANNEL" toggle >/dev/null 2>&1; fi
         amixer sset "$MIXER_CHANNEL" "${VOL_STEP}%+" >/dev/null 2>&1
-        get_volume; send_notification
+        get_volume; send_notification; broadcast_refresh
         ;;
 
     vol_down)
         if [ "$state" = "off" ]; then amixer sset "$MIXER_CHANNEL" toggle >/dev/null 2>&1; fi
         amixer sset "$MIXER_CHANNEL" "${VOL_STEP}%-" >/dev/null 2>&1
-        get_volume; send_notification
+        get_volume; send_notification; broadcast_refresh
         ;;
 
     mute_toggle)
         amixer sset "$MIXER_CHANNEL" toggle >/dev/null 2>&1
-        get_volume; send_notification
+        get_volume; send_notification; broadcast_refresh
         ;;
 
-    text) 
+    text)
         if [ "$state" = "off" ]; then
             echo "Muted"
         else
@@ -426,7 +438,7 @@ EOF
         fi
         ;;
 
-    glyph) 
+    glyph)
         if [ "$state" = "off" ]; then
             echo "󰝟"
         elif [ "$vol" -ge 90 ]; then echo "󰕾"
@@ -434,7 +446,7 @@ EOF
         else echo "󰕿"
         fi
         ;;
-        
+
     icon)
         if [ "$state" = "off" ] || [ "$vol" -eq 0 ]; then
             echo "audio-volume-muted-symbolic"
@@ -443,8 +455,8 @@ EOF
         else echo "audio-volume-low-symbolic"
         fi
         ;;
-        
-    *) 
+
+    *)
         printf "%s: unrecognised option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
         exit 1
         ;;
