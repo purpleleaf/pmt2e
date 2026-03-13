@@ -2,7 +2,7 @@
 
 # Posix compliant script for Arch based systems.
 # It can also use custom commands to adapt to other distro.
-# Designed for panels and bars like Tint2, Waybar, Polybar and SFWBar.
+# Designed for panels and bars like Tint2, Waybar, and SFWBar.
 # Authors: Max Franco <purpleleaf at ganoia.eu>
 # License: GPL3
 
@@ -98,14 +98,14 @@ get_aur_helper() {
 # PARSE OPTIONS
 # -------------------------------------------------------------------
 
-help_error_action="Only one action can be chosen between -h -c -u -m -n -p -e"
+help_error_action="Only one action can be chosen between -h -u -U -m -n -p -e"
 help_error_output="Only one output can be chosen between -i -f -t"
 
-while getopts ":hcumniftpe" opt; do
+while getopts ":huUmniftpe" opt; do
     case ${opt} in
         h) [ -n "$action" ] && die "${help_error_action}" || action="help" ;;
-        c) [ -n "$action" ] && die "${help_error_action}" || action="check" ;;
-        u) [ -n "$action" ] && die "${help_error_action}" || action="upgrade" ;;
+        u) [ -n "$action" ] && die "${help_error_action}" || action="check" ;;
+        U) [ -n "$action" ] && die "${help_error_action}" || action="upgrade" ;;
         m) [ -n "$action" ] && die "${help_error_action}" || action="menu" ;;
         n) [ -n "$action" ] && die "${help_error_action}" || action="notify" ;;
         p) [ -n "$action" ] && die "${help_error_action}" || action="toggle_flatpak" ;;
@@ -118,7 +118,7 @@ while getopts ":hcumniftpe" opt; do
 done
 
 if [ -z "$action" ] || { [ "$action" != "help" ] && [ -z "$output" ]; }; then
-    die "$scriptname requires an action [-c | -u | -m | -n | -e | -p] and an output [-i | -f | -t ] option. Run \"$scriptname -h\" for usage."
+    die "$scriptname requires an action [-u | -U | -m | -n | -e | -p] and an output [-i | -f | -t ] option. Run \"$scriptname -h\" for usage."
 fi
 
 # -------------------------------------------------------------------
@@ -127,12 +127,12 @@ fi
 
 show_help() {
     printf "Usage: %s -[Action] -[Output]\n\n" "$scriptname"
-    printf "A universal update checker and updater for status bars (Polybar, Waybar, tint2, sfwbar).\n\n"
+    printf "A universal update checker and updater for status bars (Waybar, tint2, sfwbar).\n\n"
     printf "ACTIONS (Choose exactly one):\n"
-    printf "  -c    Check for updates and print the status\n"
+    printf "  -u    Check for updates and print the status\n"
     printf "  -n    Trigger a desktop notification of available updates\n"
     printf "  -m    Show an interactive jgmenu with update options\n"
-    printf "  -u    Launch the terminal and execute the system upgrade\n"
+    printf "  -U    Launch the terminal and execute the system upgrade\n"
     printf "  -e    Clean package cache\n"
     printf "  -p    Toggle Flatpak support\n"
     printf "  -h    Show this help message and exit\n\n"
@@ -146,11 +146,11 @@ show_help() {
     printf "    check_cmd       Manual command to check updates (e.g. 'checkupdates')\n"
     printf "    upgrade_cmd     Manual command to run upgrade (e.g. 'yay -Syu')\n"
     printf "    clean_cmd       Manual command to clean cache (e.g. 'paccache -r')\n"
-    printf "    refresh_cmd     Manual command to refresh your bar (e.g. 'polybar-msg cmd restart')\n"
+    printf "    refresh_cmd     Manual command to refresh your bar (e.g. 'pkill -SIGUSR1 tint2')\n"
     printf "    terminal        Override terminal detection (e.g. 'alacritty')\n\n"
     printf "EXAMPLES:\n"
-    printf "  %s -c -t    # Check updates and output as text\n" "$scriptname"
-    printf "  %s -u -f    # Upgrade system using glyphs for UI state\n" "$scriptname"
+    printf "  %s -u -t    # Check updates and output as text\n" "$scriptname"
+    printf "  %s -U -f    # Upgrade system using glyphs for UI state\n" "$scriptname"
     exit 0
 }
 
@@ -207,7 +207,7 @@ find_updates() {
         fi
     fi
 
-    num_upd=$(printf '%s\n' "$updates" | grep -c '[^ 	]')
+    num_upd=$(printf '%s\n' "$updates" | grep -c '[^      ]')
 }
 
 # -------------------------------------------------------------------
@@ -274,8 +274,7 @@ do_upgrade() {
         refresh_string="true"
         pgrep -x tint2 >/dev/null && refresh_string="$refresh_string; pkill -USR1 -x tint2"
         pgrep -x waybar >/dev/null && refresh_string="$refresh_string; pkill -RTMIN+8 -x waybar"
-        pgrep -x polybar >/dev/null && refresh_string="$refresh_string; pkill -USR1 -x polybar"
-        pgrep -x sfwbar >/dev/null && refresh_string="$refresh_string; sfwbar -r"
+        pgrep -x sfwbar >/dev/null && refresh_string="$refresh_string; pkill -RTMIN+4 -x sfwbar"
     fi
 
     if [ -n "$upgrade_cmd" ]; then
@@ -299,17 +298,16 @@ do_toggle_flatpak() {
     else
         pgrep -x tint2 >/dev/null && pkill -USR1 -x tint2
         pgrep -x waybar >/dev/null && pkill -RTMIN+8 -x waybar
-        pgrep -x polybar >/dev/null && pkill -USR1 -x polybar
-        pgrep -x sfwbar >/dev/null && sfwbar -r
+        pgrep -x sfwbar >/dev/null && pkill -RTMIN+4 -x sfwbar
     fi
 }
 
 show_menu() {
     case "$output" in text) flag="t" ;; glyph) flag="f" ;; icon) flag="i" ;; esac
     menu_list=$(
-        printf "Check updates,%s -c -%s\n" "$scriptname" "$flag"
+        printf "Check updates,%s -u -%s\n" "$scriptname" "$flag"
         printf "Show updates,%s -n -%s\n" "$scriptname" "$flag"
-        printf "Upgrade,%s -u -%s\n" "$scriptname" "$flag"
+        printf "Upgrade,%s -U -%s\n" "$scriptname" "$flag"
         (exists pacman || [ -n "$custom_clean_cmd" ]) && printf "Empty Cache,%s -e -%s\n" "$scriptname" "$flag"
         if exists flatpak; then
             [ "$enable_flatpak" = "true" ] && txt="Disable Flatpak" || txt="Enable Flatpak"
