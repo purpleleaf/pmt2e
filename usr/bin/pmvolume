@@ -9,28 +9,32 @@
 # ==============================================================================
 
 # --- Default Configuration ---
-MIXER_CHANNEL="Auto"
-VOL_STEP=5
-MIXER_APP="alsamixer"
-MIXER_TYPE="CLI"
-TERM_EMU=""
+mixer_channel="Auto"
+vol_step=5
+mixer_app="alsamixer"
+mixer_type="CLI"
+term_emu=""
+waybar_signal="9"
+sfwbar_signal="5"
 
 # --- Load User Configuration Safely ---
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
-CONFIG_FILE="$CONFIG_DIR/pmvolume.conf"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
+config_file="$config_dir/pmvolume.conf"
 
-if [ -f "$CONFIG_FILE" ] && [ -r "$CONFIG_FILE" ]; then
+if [ -f "$config_file" ] && [ -r "$config_file" ]; then
     while IFS='=' read -r key val || [ -n "$key" ]; do
         val="${val%\"}"; val="${val#\"}"
         val="${val%\'}"; val="${val#\'}"
         case "$key" in
-            MIXER_CHANNEL) MIXER_CHANNEL="$val" ;;
-            VOL_STEP)      VOL_STEP="$val" ;;
-            MIXER_APP)     MIXER_APP="$val" ;;
-            MIXER_TYPE)    MIXER_TYPE="$val" ;;
-            TERM_EMU)      TERM_EMU="$val" ;;
+            mixer_channel) mixer_channel="$val" ;;
+            vol_step)      vol_step="$val" ;;
+            mixer_app)     mixer_app="$val" ;;
+            mixer_type)    mixer_type="$val" ;;
+            term_emu)      term_emu="$val" ;;
+            waybar_signal) waybar_signal="$val" ;;
+            sfwbar_signal) sfwbar_signal="$val" ;;
         esac
-    done < "$CONFIG_FILE"
+    done < "$config_file"
 fi
 
 # --- Global Variables ---
@@ -93,8 +97,8 @@ EOF
 # --- ALSA Parsing (BusyBox/BSD Compatible) ---
 
 get_channel() {
-    if [ "$MIXER_CHANNEL" = "Auto" ] || [ -z "$MIXER_CHANNEL" ]; then
-        MIXER_CHANNEL=$(
+    if [ "$mixer_channel" = "Auto" ] || [ -z "$mixer_channel" ]; then
+        mixer_channel=$(
             amixer scontrols |
             while IFS= read -r ctl; do
                 case "$ctl" in
@@ -109,12 +113,12 @@ get_channel() {
             done
         )
     fi
-    [ -n "$MIXER_CHANNEL" ] || die -g "No volume control available on this device."
+    [ -n "$mixer_channel" ] || die -g "No volume control available on this device."
 }
 
 get_volume() {
     vol_out=$(
-        amixer get "$MIXER_CHANNEL" |
+        amixer get "$mixer_channel" |
         while IFS= read -r line; do
             case "$line" in
                 *%*)
@@ -122,7 +126,7 @@ get_volume() {
                     for field in "$@"; do
                         case "$field" in
                             *%)
-                                printf '%s\n' "${field%%%}"
+                                printf '%s\n' "${field%\%}"
                                 return 0
                                 ;;
                         esac
@@ -133,11 +137,11 @@ get_volume() {
     )
 
     case "$vol_out" in
-        ''|*[!0-9]*) die -g "Failed to read numeric volume from control: $MIXER_CHANNEL" ;;
+        ''|*[!0-9]*) die -g "Failed to read numeric volume from control: $mixer_channel" ;;
         *) vol="$vol_out" ;;
     esac
 
-    if amixer get "$MIXER_CHANNEL" | grep '%' | grep -q off; then
+    if amixer get "$mixer_channel" | grep '%' | grep -q off; then
         state="off"
     else
         state="on"
@@ -166,12 +170,12 @@ send_notification() {
 broadcast_refresh() {
     # Check if Waybar is running before signaling
     if pgrep -x "waybar" >/dev/null; then
-        pkill -RTMIN+9 waybar
+        pkill -RTMIN+"$waybar_signal" waybar
     fi
 
     # Check if sfwbar is running before signaling
     if pgrep -x "sfwbar" >/dev/null; then
-        pkill -RTMIN+5 sfwbar
+        pkill -RTMIN+"$sfwbar_signal" sfwbar
     fi
 }
 
@@ -228,20 +232,20 @@ esac
 
 case ${action} in
     config)
-        mkdir -p "$CONFIG_DIR"
+        mkdir -p "$config_dir"
 
         while true; do
             # Build ALSA dropdown
-            combo_list="$MIXER_CHANNEL"
-            [ "$MIXER_CHANNEL" != "Auto" ] && combo_list="${combo_list}!Auto"
+            combo_list="$mixer_channel"
+            [ "$mixer_channel" != "Auto" ] && combo_list="${combo_list}!Auto"
 
             extra_controls=$(amixer scontrols 2>/dev/null | sed -n "s/.*'\(.*\)'.*/\1/p" | while read -r c; do
-                [ "$c" != "$MIXER_CHANNEL" ] && printf "!%s" "$c"
+                [ "$c" != "$mixer_channel" ] && printf "!%s" "$c"
             done)
             combo_list="${combo_list}${extra_controls}"
 
             # Set Type dropdown order dynamically
-            if [ "$MIXER_TYPE" = "GUI" ]; then
+            if [ "$mixer_type" = "GUI" ]; then
                 type_combo="GUI!CLI"
             else
                 type_combo="CLI!GUI"
@@ -252,10 +256,10 @@ case ${action} in
                 --form \
                 --columns=2 \
                 --field="ALSA Channel:":CB "$combo_list" \
-                --field="Volume Step (%):NUM" "$VOL_STEP"'!1..100!1!0' \
-                --field="Mixer App:" "$MIXER_APP" \
+                --field="Volume Step (%):NUM" "$vol_step"'!1..100!1!0' \
+                --field="Mixer App:" "$mixer_app" \
                 --field="Mixer Type:":CB "$type_combo" \
-                --field="Terminal Emulator:" "$TERM_EMU" \
+                --field="Terminal Emulator:" "$term_emu" \
                 --field='!gtk-help!ALSA Channel':BTN "yad --info --title='Info' --borders=15 --text='Select the ALSA control. Auto will attempt to find the default volume slider.'" \
                 --field='!gtk-help!Volume Step Size':BTN "yad --info --title='Info' --borders=15 --text='How much the volume changes when using the up/down commands.'" \
                 --field='!gtk-help!Mixer App':BTN "yad --info --title='Info' --borders=15 --text='The mixer to launch (e.g., alsamixer, qasmixer).'" \
@@ -288,13 +292,24 @@ EOF
                 t_emu=""
             fi
 
+            # Safely write/update the config file, preserving user signal overrides
+            [ ! -f "$config_file" ] && touch "$config_file"
+
+            # Clean out the old ALSA lines, then append the new ones
+            sed -i '/^mixer_channel=/d; /^vol_step=/d; /^mixer_app=/d; /^mixer_type=/d; /^term_emu=/d' "$config_file"
+
             {
-              echo "MIXER_CHANNEL='$ch_name'"
-              echo "VOL_STEP=$v_step"
-              echo "MIXER_APP='$m_app'"
-              echo "MIXER_TYPE='$m_type'"
-              echo "TERM_EMU='$t_emu'"
-            } > "$CONFIG_FILE"
+              echo "mixer_channel='$ch_name'"
+              echo "vol_step=$v_step"
+              echo "mixer_app='$m_app'"
+              echo "mixer_type='$m_type'"
+              echo "term_emu='$t_emu'"
+            } >> "$config_file"
+
+            # If signals are missing, populate them with defaults so the user knows they exist
+            grep -q "^waybar_signal=" "$config_file" || echo "waybar_signal='$waybar_signal'" >> "$config_file"
+            grep -q "^sfwbar_signal=" "$config_file" || echo "sfwbar_signal='$sfwbar_signal'" >> "$config_file"
+
             break
         done
         ;;
@@ -377,16 +392,16 @@ EOF
         ;;
 
     open_mixer)
-        if [ "$MIXER_TYPE" = "GUI" ]; then
-            if exists "$MIXER_APP"; then
-                $MIXER_APP &
+        if [ "$mixer_type" = "GUI" ]; then
+            if exists "$mixer_app"; then
+                $mixer_app &
             else
                 $0 -c
             fi
             exit 0
         fi
 
-        if [ -z "$TERM_EMU" ] || ! exists "$TERM_EMU"; then
+        if [ -z "$term_emu" ] || ! exists "$term_emu"; then
             yad --title="Missing Terminal" \
                 --text="No valid terminal emulator configured.\nPlease set one to open your CLI mixer." \
                 --window-icon="dialog-warning" \
@@ -400,7 +415,7 @@ EOF
             exit 0
         fi
 
-        $TERM_EMU -e $MIXER_APP &
+        $term_emu -e $mixer_app &
         ;;
 
     menu)
@@ -409,24 +424,24 @@ EOF
         ;;
 
     set_vol)
-        amixer sset "$MIXER_CHANNEL" "${input_vol}%" >/dev/null 2>&1
+        amixer sset "$mixer_channel" "${input_vol}%" >/dev/null 2>&1
         get_volume; send_notification; broadcast_refresh
         ;;
 
     vol_up)
-        if [ "$state" = "off" ]; then amixer sset "$MIXER_CHANNEL" toggle >/dev/null 2>&1; fi
-        amixer sset "$MIXER_CHANNEL" "${VOL_STEP}%+" >/dev/null 2>&1
+        if [ "$state" = "off" ]; then amixer sset "$mixer_channel" toggle >/dev/null 2>&1; fi
+        amixer sset "$mixer_channel" "${vol_step}%+" >/dev/null 2>&1
         get_volume; send_notification; broadcast_refresh
         ;;
 
     vol_down)
-        if [ "$state" = "off" ]; then amixer sset "$MIXER_CHANNEL" toggle >/dev/null 2>&1; fi
-        amixer sset "$MIXER_CHANNEL" "${VOL_STEP}%-" >/dev/null 2>&1
+        if [ "$state" = "off" ]; then amixer sset "$mixer_channel" toggle >/dev/null 2>&1; fi
+        amixer sset "$mixer_channel" "${vol_step}%-" >/dev/null 2>&1
         get_volume; send_notification; broadcast_refresh
         ;;
 
     mute_toggle)
-        amixer sset "$MIXER_CHANNEL" toggle >/dev/null 2>&1
+        amixer sset "$mixer_channel" toggle >/dev/null 2>&1
         get_volume; send_notification; broadcast_refresh
         ;;
 
