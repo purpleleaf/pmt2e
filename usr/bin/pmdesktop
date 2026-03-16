@@ -1,6 +1,158 @@
 #!/bin/sh
 # ==============================================================================
 # Script Name  : pmdesktop
+# Description  : PMT2e Workspace Agent - Switch and Manage Openbox Desktops
+# Author       : Max Franco <purpleleaf at ganoia.eu>
+# License      : GPL-3.0
+# Dependencies : wmctrl, yad, jgmenu, openbox
+# ==============================================================================
+
+iconpath="/usr/share/pmt2e/icons"
+scriptname=$(basename "$0")
+lock_file="/tmp/${scriptname}.lock"
+RC_XML="$HOME/.config/openbox/rc.xml"
+
+# ---------------------------------------------------------
+# Error handling & Utilities
+# ---------------------------------------------------------
+exists() { command -v "$1" >/dev/null 2>&1; }
+
+show_dialog() {
+    [ -f "$lock_file" ] && return
+    touch "$lock_file"
+    yad --title="$2" \
+        --text="$1" \
+        --image="$3" \
+        --window-icon="$3" \
+        --borders=15 \
+        --button="Close:0"
+    rm -f "$lock_file"
+}
+
+die() {
+    if [ "$1" = "-y" ]; then
+        shift
+        if exists yad; then 
+            show_dialog "$*" "Workspace Error" "dialog-error"
+        else 
+            printf '%s\n' "$*" 1>&2
+        fi
+    else
+        printf '%s\n' "$*" 1>&2
+    fi
+    exit 1
+}
+
+# ---------------------------------------------------------
+# Workspace Logic
+# ---------------------------------------------------------
+get_ws_info() {
+    exists wmctrl || return 1
+    ws_data=$(wmctrl -d)
+    total_ws=$(printf '%s\n' "$ws_data" | wc -l)
+    current_ws=$(printf '%s\n' "$ws_data" | grep '*' | awk '{print $1}')
+}
+
+set_ws() {
+    target="$1"
+    [ "$target" -lt 0 ] || [ "$target" -ge "$total_ws" ] && return
+    wmctrl -s "$target"
+}
+
+set_total_desktops() {
+    new_total="$1"
+    [ -z "$new_total" ] && return
+    # Bounds check
+    if [ "$new_total" -lt 1 ] || [ "$new_total" -gt 10 ]; then return; fi
+
+    if [ -f "$RC_XML" ]; then
+        # Precise sed targeting for Openbox rc.xml
+        sed -i "/<desktops>/,/<number>/ s|<number>.*</number>|<number>$new_total</number>|" "$RC_XML"
+        exists openbox && openbox --reconfigure
+    else
+        # Fallback for live session if no config found
+        wmctrl -n "$new_total"
+    fi
+}
+
+do_total_gui() {
+    exists yad || die -y "yad is required for this action."
+    get_ws_info
+    
+    # Using single quotes for the value field to avoid shell collision
+    new_val=$(yad --title='Desktop Settings' --window-icon='workspace-number' \
+        --text='Set total number of desktops (Max 10):' \
+        --form --field='Number of Desktops:NUM' "$total_ws"'!1..10!1!0' \
+        --button='Apply:0' --button='Cancel:1' --borders=15)
+    
+    if [ $? -eq 0 ]; then
+        clean_val=$(printf '%s\n' "$new_val" | cut -d'|' -f1 | cut -d'.' -f1)
+        set_total_desktops "$clean_val"
+    fi
+}
+
+# ---------------------------------------------------------
+# Execution
+# ---------------------------------------------------------
+exists wmctrl || exit 0
+get_ws_info
+
+action=""
+output_format=""
+input_val=""
+
+[ $# -eq 0 ] && output_format="text"
+
+while getopts ":huds:iftmG" opt; do
+    case ${opt} in
+        h) printf "Usage: %s [-u|-d|-s idx|-G] [-t|-f|-i|-m]\n" "$scriptname"; exit 0 ;;
+        u) action="up" ;;
+        d) action="down" ;;
+        s) action="set"; input_val="$OPTARG" ;;
+        m) action="menu" ;;
+        G) action="total_gui" ;;
+        i) output_format="icon" ;;
+        f) output_format="glyph" ;;
+        t) output_format="text" ;;
+    esac
+done
+
+if [ -n "$action" ]; then
+    case "$action" in
+        up)   set_ws "$((current_ws + 1))" ;;
+        down) set_ws "$((current_ws - 1))" ;;
+        set)  set_ws "$input_val" ;;
+        total_gui) do_total_gui; exit 0 ;;
+        menu) 
+            menu_list=$(
+                printf "Manage Desktops (GUI),%s -G\n" "$scriptname"
+                printf "^sep()\n"
+                i=0
+                while [ "$i" -lt "$total_ws" ]; do
+                    display_idx=$((i + 1))
+                    [ "$i" -eq "$current_ws" ] && prefix="●" || prefix="○"
+                    printf "%s Workspace %s,%s -s %s\n" "$prefix" "$display_idx" "$scriptname" "$i"
+                    i=$((i + 1))
+                done
+            )
+            printf '%s\n' "$menu_list" | createjgmenu
+            exit 0
+            ;;
+    esac
+    get_ws_info
+    [ -z "$output_format" ] && exit 0
+fi
+
+if [ -n "$output_format" ]; then
+    display_num=$((current_ws + 1))
+    case "$output_format" in
+        text)  printf '%s/%s\n' "$display_num" "$total_ws" ;;
+        glyph) printf '󰇄 %s\n' "$display_num" ;;
+        icon)  printf '%s/desktop.svg\n' "$iconpath" ;;
+    esac
+fi#!/bin/sh
+# ==============================================================================
+# Script Name  : pmdesktop
 # Description  : PMT2e Workspace Agent - Support for wmctrl
 # Author       : Max Franco <purpleleaf at ganoia.eu>
 # License      : GPL-3.0
