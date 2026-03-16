@@ -1,0 +1,161 @@
+#!/bin/sh
+# ==============================================================================
+# Script Name  : pmdesktop
+# Description  : PMT2e Workspace Agent - Support for wmctrl
+# Author       : Max Franco <purpleleaf at ganoia.eu>
+# License      : GPL-3.0
+# Dependencies : wmctrl, yad, jgmenu
+# ==============================================================================
+
+iconpath="/usr/share/pmt2e/icons"
+scriptname=$(basename "$0")
+lock_file="/tmp/${scriptname}.lock"
+
+# ---------------------------------------------------------
+# Error handling & Utilities
+# ---------------------------------------------------------
+exists() { command -v "$1" >/dev/null 2>&1; }
+
+show_dialog() {
+    [ -f "$lock_file" ] && return
+    touch "$lock_file"
+    yad --title="$2" \
+        --text="$1" \
+        --image="$3" \
+        --window-icon="$3" \
+        --borders=15 \
+        --button="Close:0"
+    rm -f "$lock_file"
+}
+
+die() {
+    if [ "$1" = "-y" ]; then
+        shift
+        if exists yad; then 
+            show_dialog "$*" "Workspace Error" "dialog-error"
+        else 
+            printf '%s\n' "$*" 1>&2
+        fi
+    else
+        printf '%s\n' "$*" 1>&2
+    fi
+    exit 1
+}
+
+show_help() {
+    cat << EOF
+Usage: $scriptname [Action] | [Output]
+
+PMT2e Workspace Agent - Switch and monitor virtual desktops.
+
+ACTIONS (Choose one):
+  -u        Switch to next workspace (Up)
+  -d        Switch to previous workspace (Down)
+  -s [0-N]  Switch to specific workspace index
+  -m        Show interactive jgmenu
+  -h        Show this help message and exit
+
+OUTPUT FORMATS:
+  -t        Print text output (e.g., '1/4') (Default)
+  -f        Print Nerd Font glyph
+  -i        Print path to desktop SVG icon
+EOF
+}
+
+# ---------------------------------------------------------
+# Workspace Logic (wmctrl)
+# ---------------------------------------------------------
+get_ws_info() {
+    exists wmctrl || return 1
+    # Get total workspaces and current index
+    ws_data=$(wmctrl -d)
+    total_ws=$(printf '%s\n' "$ws_data" | wc -l)
+    current_ws=$(printf '%s\n' "$ws_data" | grep '*' | awk '{print $1}')
+}
+
+set_ws() {
+    exists wmctrl || die -y "wmctrl not found. Please install it to manage workspaces."
+    target="$1"
+    # Bound checking
+    if [ "$target" -lt 0 ] || [ "$target" -ge "$total_ws" ]; then
+        return
+    fi
+    wmctrl -s "$target"
+}
+
+# ---------------------------------------------------------
+# Execution & Argument Parsing
+# ---------------------------------------------------------
+get_ws_info
+action=""
+output_format=""
+input_val=""
+
+[ $# -eq 0 ] && output_format="text"
+
+while getopts ":huds:iftm" opt; do
+    case ${opt} in
+        h) show_help; exit 0 ;;
+        u) action="up" ;;
+        d) action="down" ;;
+        s) action="set"; input_val="$OPTARG" ;;
+        m) action="menu" ;;
+        i) output_format="icon" ;;
+        f) output_format="glyph" ;;
+        t) output_format="text" ;;
+        \?|*) die "Invalid option. Use -h for help." ;;
+    esac
+done
+
+if [ -n "$action" ]; then
+    case "$action" in
+        up)   set_ws "$((current_ws + 1))" ;;
+        down) set_ws "$((current_ws - 1))" ;;
+        set)  set_ws "$input_val" ;;
+        menu) 
+            menu_list=$(
+                i=0
+                while [ "$i" -lt "$total_ws" ]; do
+                    display_idx=$((i + 1))
+                    if [ "$i" -eq "$current_ws" ]; then
+                        printf "● Workspace %s,%s -s %s\n" "$display_idx" "$scriptname" "$i"
+                    else
+                        printf "○ Workspace %s,%s -s %s\n" "$display_idx" "$scriptname" "$i"
+                    fi
+                    i=$((i + 1))
+                done
+            )
+            printf '%s\n' "$menu_list" | createjgmenu
+            exit 0
+            ;;
+    esac
+    [ -z "$output_format" ] && exit 0
+    # Refresh info after switch
+    get_ws_info
+fi
+
+if [ -n "$output_format" ]; then
+    if [ -z "$total_ws" ]; then
+        case "$output_format" in
+            text)  printf 'WS: N/A\n' ;;
+            glyph) printf '󰇄 <span color="red">󱈸</span>\n' ;;
+            icon)  printf '%s/bri-error.svg\n' "$iconpath" ;; # Reusing error icon
+        esac
+        exit 0
+    fi
+
+    case "$output_format" in
+        text)  printf '%s/%s\n' "$((current_ws + 1))" "$total_ws" ;;
+        glyph)
+            # Map common workspace icons
+            case $((current_ws + 1)) in
+                1) g="󰎤" ;; 2) g="󰎧" ;; 3) g="󰎪" ;; 4) g="󰎭" ;;
+                *) g="󰇄" ;;
+            esac
+            printf '%s\n' "$g"
+            ;;
+        icon)
+            printf '%s/desktop.svg\n' "$iconpath"
+            ;;
+    esac
+fi
