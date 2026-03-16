@@ -25,6 +25,7 @@ show_help() {
 Usage: $scriptname [Action] | [Output]
 
 PMT2e Desktop Agent - Manage workspaces and move windows.
+Defaults to '-t' if no parameters are provided.
 
 ACTIONS (Choose one):
   -n    Switch to NEXT desktop
@@ -41,7 +42,7 @@ OUTPUT FORMATS (For status bars):
 
 Examples:
   $scriptname -n       # Go to next desktop
-  $scriptname -t       # Print current desktop number
+  $scriptname          # Print current desktop number (defaults to -t)
 EOF
 }
 
@@ -122,6 +123,11 @@ exists xdotool || die "xdotool is required but not found."
 action=""
 output_format=""
 
+# Default to text output if no parameters provided
+if [ $# -eq 0 ]; then
+    output_format="text"
+fi
+
 while getopts ":hnprmiwft" opt; do
     case ${opt} in
         h) show_help; exit 0 ;;
@@ -162,6 +168,3 @@ if [ -n "$output_format" ]; then
     esac
     exit 0
 fi
-
-# Fallback
-show_help
