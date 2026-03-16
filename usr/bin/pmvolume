@@ -1,6 +1,171 @@
 #!/bin/sh
 # ==============================================================================
 # Script Name  : pmvolume
+# Description  : PMT2e Volume Executor - ALSA monitor with flood protection
+# Author       : Max Franco <purpleleaf at ganoia.eu>
+# License      : GPL-3.0
+# Dependencies : alsa-utils, yad, jgmenu, pmgui-scale (external)
+# ==============================================================================
+
+iconpath="/usr/share/pmt2e/icons"
+scriptname=$(basename "$0")
+lock_file="/tmp/${scriptname}.lock"
+
+# ---------------------------------------------------------
+# Error handling & Utilities
+# ---------------------------------------------------------
+exists() { command -v "$1" >/dev/null 2>&1; }
+
+show_dialog() {
+    [ -f "$lock_file" ] && return
+    touch "$lock_file"
+    yad --title="$2" \
+        --text="$1" \
+        --image="$3" \
+        --window-icon="$3" \
+        --borders=15 \
+        --button="Close:0"
+    rm -f "$lock_file"
+}
+
+die() {
+    if [ "$1" = "-y" ]; then
+        shift
+        if exists yad; then show_dialog "$*" "Volume Error" "dialog-error"
+        else printf '%s\n' "$*" 1>&2; fi
+    else
+        printf '%s\n' "$*" 1>&2
+    fi
+    exit 1
+}
+
+# --- Configuration Load ---
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
+config_file="$config_dir/pmvolume.conf"
+
+mixer_channel="Auto"
+vol_step=5
+waybar_signal="9"
+sfwbar_signal="5"
+
+if [ -f "$config_file" ] && [ -r "$config_file" ]; then
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+        val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
+        case "$key" in
+            mixer_channel) mixer_channel="$val" ;;
+            vol_step)      vol_step="$val" ;;
+            waybar_signal) waybar_signal="$val" ;;
+            sfwbar_signal) sfwbar_signal="$val" ;;
+        esac
+    done < "$config_file"
+fi
+
+# ---------------------------------------------------------
+# ALSA Logic
+# ---------------------------------------------------------
+get_channel() {
+    if [ "$mixer_channel" = "Auto" ]; then
+        mixer_channel=$(amixer scontrols | sed -n "s/.*'\(.*\)'.*/\1/p" | head -n1)
+    fi
+    [ -n "$mixer_channel" ] || die -y "No ALSA control found. Check your soundcard settings."
+}
+
+get_volume() {
+    status=$(amixer get "$mixer_channel" 2>/dev/null)
+    [ $? -ne 0 ] && return 1
+    
+    # POSIX safe parsing using tr to remove noise and extract only the number
+    vol=$(printf '%s\n' "$status" | grep -m1 "[%]" | tr -d '[]%,' | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/) {print $i; break}}')
+    
+    if printf '%s\n' "$status" | grep -q "\[off\]"; then 
+        state="off"
+    else 
+        state="on"
+    fi
+}
+
+send_notification() {
+    exists dunstify || return
+    if [ "$state" = "off" ]; then
+        dunstify -t 1000 -h string:x-dunst-stack-tag:volume -i audio-volume-muted-symbolic "Volume Muted"
+    else
+        [ "$vol" -ge 70 ] && icon="audio-volume-high-symbolic" || ([ "$vol" -ge 30 ] && icon="audio-volume-medium-symbolic" || icon="audio-volume-low-symbolic")
+        dunstify -t 1000 -h string:x-dunst-stack-tag:volume -i "$icon" -h int:value:"$vol" "Volume: ${vol}%"
+    fi
+}
+
+broadcast_refresh() {
+    pgrep -x waybar >/dev/null && pkill -RTMIN+"$waybar_signal" waybar
+    pgrep -x sfwbar >/dev/null && pkill -RTMIN+"$sfwbar_signal" sfwbar
+}
+
+# ---------------------------------------------------------
+# Execution
+# ---------------------------------------------------------
+get_channel
+action=""
+output_format=""
+[ $# -eq 0 ] && output_format="text"
+
+while getopts ":huxdms:iftg" opt; do
+    case ${opt} in
+        h) cat <<EOF
+Usage: $scriptname [Action] | [Output]
+Actions: -u (up), -d (down), -x (mute), -s [0-100] (set), -m (menu), -g (gui)
+Outputs: -t (text), -f (glyph), -i (icon)
+EOF
+           exit 0 ;;
+        u) action="up" ;;
+        d) action="down" ;;
+        x) action="mute" ;;
+        s) action="set"; input_vol="$OPTARG" ;;
+        g) pmgui-scale -v; exit 0 ;;
+        m) action="menu" ;;
+        i) output_format="icon" ;;
+        f) output_format="glyph" ;;
+        t) output_format="text" ;;
+    esac
+done
+
+if [ -n "$action" ]; then
+    case "$action" in
+        up)   amixer sset "$mixer_channel" "${vol_step}%+" >/dev/null ;;
+        down) amixer sset "$mixer_channel" "${vol_step}%-" >/dev/null ;;
+        mute) amixer sset "$mixer_channel" toggle >/dev/null ;;
+        set)  amixer sset "$mixer_channel" "${input_vol}%" >/dev/null ;;
+        menu) printf "Volume GUI,pmgui-scale -v\nMixer,xterm -e alsamixer\n" | createjgmenu; exit 0 ;;
+    esac
+    get_volume; send_notification; broadcast_refresh
+    [ -z "$output_format" ] && exit 0
+fi
+
+if [ -n "$output_format" ]; then
+    get_volume
+    if [ $? -ne 0 ]; then
+        case "$output_format" in
+            text)  echo "Vol: N/A" ;;
+            glyph) echo "󰝟" ;;
+            icon)  echo "audio-volume-muted-symbolic" ;;
+        esac
+        exit 0
+    fi
+
+    if [ "$state" = "off" ]; then
+        case "$output_format" in
+            text)  echo "Muted" ;;
+            glyph) echo "󰝟" ;;
+            icon)  echo "audio-volume-muted-symbolic" ;;
+        esac
+    else
+        case "$output_format" in
+            text)  echo "${vol}%" ;;
+            glyph) [ "$vol" -ge 66 ] && echo "󰕾" || ([ "$vol" -ge 33 ] && echo "󰖀" || echo "󰕿") ;;
+            icon)  [ "$vol" -ge 70 ] && echo "audio-volume-high-symbolic" || echo "audio-volume-low-symbolic" ;;
+        esac
+    fi
+fi#!/bin/sh
+# ==============================================================================
+# Script Name  : pmvolume
 # Description  : PMT2e Volume Executor - A lightweight ALSA volume monitor
 # Author       : Max Franco <purpleleaf at ganoia.eu>
 # Credits      : Piotr Miller (nwg-piotr) - Original creator of the t2ec project
