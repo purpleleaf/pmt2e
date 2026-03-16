@@ -52,6 +52,351 @@ custom_clean_cmd=""
 refresh_cmd=""
 arch_use_helper="false"
 enable_flatpak="false"
+waybar_signal="8"
+sfwbar_signal="4"
+
+# Terminal detection
+terminal=""
+for term in $terminal_list; do
+    if exists "$term"; then terminal="$term"; break; fi
+done
+
+if [ -f "$config" ]; then
+    terminal_from_conf=$(sed -n 's/^terminal=//p' "$config" | head -n1)
+    [ -n "$terminal_from_conf" ] && terminal="${terminal_from_conf%% *}"
+    
+    custom_check_cmd=$(sed -n 's/^check_cmd=//p' "$config" | head -n1)
+    custom_upgrade_cmd=$(sed -n 's/^upgrade_cmd=//p' "$config" | head -n1)
+    custom_clean_cmd=$(sed -n 's/^clean_cmd=//p' "$config" | head -n1)
+    refresh_cmd=$(sed -n 's/^refresh_cmd=//p' "$config" | head -n1)
+    
+    ws_conf=$(sed -n 's/^waybar_signal=//p' "$config" | head -n1)
+    ss_conf=$(sed -n 's/^sfwbar_signal=//p' "$config" | head -n1)
+    [ -n "$ws_conf" ] && waybar_signal="$ws_conf"
+    [ -n "$ss_conf" ] && sfwbar_signal="$ss_conf"
+    
+    arch_use_helper_raw=$(sed -n 's/^arch_use_helper=//p' "$config" | head -n1)
+    case "$(printf '%s' "$arch_use_helper_raw" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|y|on) arch_use_helper="true" ;;
+        *) arch_use_helper="false" ;;
+    esac
+
+    enable_flatpak_raw=$(sed -n 's/^enable_flatpak=//p' "$config" | head -n1)
+    case "$(printf '%s' "$enable_flatpak_raw" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|y|on) enable_flatpak="true" ;;
+        *) enable_flatpak="false" ;;
+    esac
+else
+    [ ! -d "$config_dir" ] && mkdir -p "$config_dir"
+    {
+        [ -n "$terminal" ] && printf 'terminal=%s\n' "$terminal"
+        printf 'waybar_signal=%s\n' "$waybar_signal"
+        printf 'sfwbar_signal=%s\n' "$sfwbar_signal"
+    } > "$config"
+fi
+
+[ -z "$terminal" ] && die "No available terminal found."
+
+get_aur_helper() {
+    if [ -n "$aur_helper" ]; then return; fi
+    if exists yay; then aur_helper="yay"
+    elif exists paru; then aur_helper="paru"
+    elif exists trizen; then aur_helper="trizen"
+    elif exists aura; then aur_helper="aura"
+    else aur_helper="pacman"; fi
+}
+
+# -------------------------------------------------------------------
+# PARSE OPTIONS
+# -------------------------------------------------------------------
+
+help_error_action="Only one action can be chosen between -h -u -U -m -n -p -e"
+help_error_output="Only one output can be chosen between -i -f -t"
+
+while getopts ":huUmniftpe" opt; do
+    case ${opt} in
+        h) [ -n "$action" ] && die "${help_error_action}" || action="help" ;;
+        u) [ -n "$action" ] && die "${help_error_action}" || action="check" ;;
+        U) [ -n "$action" ] && die "${help_error_action}" || action="upgrade" ;;
+        m) [ -n "$action" ] && die "${help_error_action}" || action="menu" ;;
+        n) [ -n "$action" ] && die "${help_error_action}" || action="notify" ;;
+        p) [ -n "$action" ] && die "${help_error_action}" || action="toggle_flatpak" ;;
+        e) [ -n "$action" ] && die "${help_error_action}" || action="clean" ;;
+        i) [ -n "$output" ] && die "${help_error_output}" || output="icon" ;;
+        f) [ -n "$output" ] && die "${help_error_output}" || output="glyph" ;;
+        t) [ -n "$output" ] && die "${help_error_output}" || output="text" ;;
+        *) die "Invalid option -$OPTARG" ;;
+    esac
+done
+
+if [ -z "$action" ] || { [ "$action" != "help" ] && [ -z "$output" ]; }; then
+    die "$scriptname requires an action [-u | -U | -m | -n | -e | -p] and an output [-i | -f | -t ] option. Run \"$scriptname -h\" for usage."
+fi
+
+# -------------------------------------------------------------------
+# CORE FUNCTIONS
+# -------------------------------------------------------------------
+
+show_help() {
+    printf "Usage: %s -[Action] -[Output]\n\n" "$scriptname"
+    printf "A universal update checker and updater for status bars (Waybar, tint2, sfwbar).\n\n"
+    printf "ACTIONS (Choose exactly one):\n"
+    printf "  -u    Check for updates and print the status\n"
+    printf "  -n    Trigger a desktop notification of available updates\n"
+    printf "  -m    Show an interactive jgmenu with update options\n"
+    printf "  -U    Launch the terminal and execute the system upgrade\n"
+    printf "  -e    Clean package cache\n"
+    printf "  -p    Toggle Flatpak support\n"
+    printf "  -h    Show this help message and exit\n\n"
+    printf "OUTPUT FORMATS (Choose exactly one):\n"
+    printf "  -t    Text output (e.g., 'Upd: 5' or 'Up-to-date')\n"
+    printf "  -f    Glyph/Font icon output (e.g., 󱆢 or 󰕥)\n"
+    printf "  -i    Image icon output\n\n"
+    printf "CONFIGURATION & OVERRIDES:\n"
+    printf "  User overrides are set in: ~/.config/pmt2e/pmu.conf\n"
+    printf "  The script prioritizes these variables if defined:\n"
+    printf "    check_cmd       Manual command to check updates (e.g. 'checkupdates')\n"
+    printf "    upgrade_cmd     Manual command to run upgrade (e.g. 'yay -Syu')\n"
+    printf "    clean_cmd       Manual command to clean cache (e.g. 'paccache -r')\n"
+    printf "    refresh_cmd     Manual command to refresh your bar (e.g. 'pkill -SIGUSR1 tint2')\n"
+    printf "    terminal        Override terminal detection (e.g. 'alacritty')\n"
+    printf "    waybar_signal   Signal number to refresh Waybar (Default: 8)\n"
+    printf "    sfwbar_signal   Signal number to refresh sfwbar (Default: 4)\n\n"
+    printf "EXAMPLES:\n"
+    printf "  %s -u -t    # Check updates and output as text\n" "$scriptname"
+    printf "  %s -U -f    # Upgrade system using glyphs for UI state\n" "$scriptname"
+    exit 0
+}
+
+check_reboot() {
+    reboot_required="false"
+    if [ -f /var/run/reboot-required ]; then reboot_required="true"
+    elif exists needs-restarting && ! needs-restarting -r >/dev/null 2>&1; then reboot_required="true"
+    elif [ ! -d "/lib/modules/$(uname -r)" ]; then reboot_required="true"; fi
+}
+
+find_updates() {
+    updates=""
+    current_time=$(date +%s)
+    sync_marker="/tmp/pmu_sync_marker"
+    custom_cache="/tmp/pmu_custom_cache"
+    CHECK_INTERVAL=600 
+
+    last_sync=$(cat "$sync_marker" 2>/dev/null || echo 0)
+    cooldown_active=false
+    [ $((current_time - last_sync)) -lt "$CHECK_INTERVAL" ] && cooldown_active=true
+
+    if exists pacman; then
+        get_aur_helper
+        if [ "$cooldown_active" = "true" ]; then
+            updates=$(LC_ALL=C checkupdates -n --nocolor 2>/dev/null | sed 's/ .*//')
+        else
+            printf '%s' "$current_time" > "$sync_marker"
+            if [ "$arch_use_helper" = "true" ]; then
+                updates=$(LC_ALL=C $aur_helper -Qu 2>/dev/null | sed 's/ .*//')
+            else
+                updates=$(LC_ALL=C checkupdates --nocolor 2>/dev/null | sed 's/ .*//')
+            fi
+            [ $? -ne 0 ] && rm -f "$sync_marker"
+        fi
+        aur_upd=$($aur_helper -Qu -a 2>/dev/null)
+        if [ -n "$aur_upd" ]; then
+            [ -n "$updates" ] && updates=$(printf '%s\n%s' "$updates" "$aur_upd") || updates="$aur_upd"
+        fi
+    elif [ -n "$custom_check_cmd" ]; then
+        if [ "$cooldown_active" = "true" ] && [ -f "$custom_cache" ]; then
+            updates=$(cat "$custom_cache")
+        else
+            printf '%s' "$current_time" > "$sync_marker"
+            updates=$(sh -c "$custom_check_cmd" 2>/dev/null)
+            printf '%s' "$updates" > "$custom_cache"
+            [ $? -ne 0 ] && rm -f "$sync_marker"
+        fi
+    fi
+
+    if [ "$enable_flatpak" = "true" ] && exists flatpak; then
+        f_upd=$(LC_ALL=C flatpak remote-ls --updates --columns=application 2>/dev/null)
+        if [ -n "$f_upd" ]; then
+            [ -n "$updates" ] && updates=$(printf '%s\n%s' "$updates" "$f_upd") || updates="$f_upd"
+        fi
+    fi
+
+    num_upd=$(printf '%s\n' "$updates" | grep -c '[^      ]')
+}
+
+# -------------------------------------------------------------------
+# ACTION HANDLERS
+# -------------------------------------------------------------------
+
+do_check() {
+    if [ "$output" = "text" ]; then printf "Checking...\n"
+    elif [ "$output" = "glyph" ]; then printf "󰂪\n"
+    elif [ "$output" = "icon" ]; then printf "/usr/share/pmt2e/icons/refresh.svg\n"; fi
+
+    find_updates
+    check_reboot
+
+    if [ "$output" = "text" ]; then
+        if [ "$reboot_required" = "true" ]; then
+            [ "$num_upd" -gt 0 ] && printf " Upd: %d [Reboot]\n" "$num_upd" || printf " Reboot Required\n"
+        else
+            [ "$num_upd" -gt 0 ] && printf " Upd: %d\n" "$num_upd" || printf " Up-to-date\n"
+        fi
+    elif [ "$output" = "glyph" ]; then
+        if [ "$reboot_required" = "true" ]; then
+            [ "$num_upd" -gt 0 ] && printf "󱆢 <span foreground='#ff4444'>●</span> 󰑓\n" || printf "󰑓\n"
+        else
+            [ "$num_upd" -gt 0 ] && printf "󱆢 <span foreground='#ff4444'>●</span>\n" || printf "󰕥\n"
+        fi
+    elif [ "$output" = "icon" ]; then
+        if [ "$reboot_required" = "true" ]; then printf "/usr/share/pmt2e/icons/reboot.svg\n"
+        elif [ "$num_upd" -gt 0 ]; then printf "/usr/share/pmt2e/icons/system-update-notify.svg\n"
+        else printf "/usr/share/pmt2e/icons/system-update.svg\n"; fi
+    fi
+}
+
+do_notify() {
+    find_updates
+    if [ -n "$updates" ]; then
+        printf '%s\n' "$updates" | yad --title="Pending Updates: $num_upd" \
+            --window-icon="/usr/share/pmt2e/icons/system-update-notify.svg" \
+            --list --no-headers --column="Packages" \
+            --width=350 --height=500 --center \
+            --button="Close:0" --button="Upgrade Now:1"
+        [ "$?" -eq 1 ] && do_upgrade
+    fi
+}
+
+do_upgrade() {
+    case "$output" in
+        glyph) printf "󰂪\n" ;;
+        text)  printf "Updating..\n" ;;
+        icon)  printf "/usr/share/pmt2e/icons/arch-icon-notify.svg\n" ;;
+    esac
+
+    if exists pacman; then
+        get_aur_helper
+        [ "$(id -u)" -ne 0 ] && [ "$aur_helper" = "pacman" ] && upgrade_cmd="sudo pacman -Syu" || upgrade_cmd="${aur_helper} -Syu"
+    elif [ -n "$custom_upgrade_cmd" ]; then
+        upgrade_cmd="$custom_upgrade_cmd"
+    fi
+    [ "$enable_flatpak" = "true" ] && exists flatpak && upgrade_cmd="$upgrade_cmd; flatpak update"
+
+    if [ -n "$refresh_cmd" ]; then 
+        refresh_string="$refresh_cmd"
+    else
+        refresh_string="true"
+        pgrep -x tint2 >/dev/null && refresh_string="$refresh_string; pkill -USR1 -x tint2"
+        pgrep -x waybar >/dev/null && refresh_string="$refresh_string; pkill -RTMIN+${waybar_signal} -x waybar"
+        pgrep -x sfwbar >/dev/null && refresh_string="$refresh_string; pkill -RTMIN+${sfwbar_signal} -x sfwbar"
+    fi
+
+    if [ -n "$upgrade_cmd" ]; then
+        $terminal -e sh -c "$upgrade_cmd; rm -f /tmp/pmu_sync_marker /tmp/pmu_custom_cache; printf '\nDone. Enter... '; read dummy; $refresh_string"
+    fi
+    exit 0
+}
+
+do_clean() {
+    if exists pacman; then clean_cmd="sudo pacman -Sc"
+    elif [ -n "$custom_clean_cmd" ]; then clean_cmd="$custom_clean_cmd"; fi
+    [ -n "$clean_cmd" ] && $terminal -e sh -c "$clean_cmd; printf '\nDone. Enter... '; read dummy"
+}
+
+do_toggle_flatpak() {
+    [ "$enable_flatpak" = "true" ] && val="false" || val="true"
+    sed -i "s/^enable_flatpak=.*/enable_flatpak=\"$val\"/" "$config"
+    
+    if [ -n "$refresh_cmd" ]; then 
+        eval "$refresh_cmd"
+    else
+        pgrep -x tint2 >/dev/null && pkill -USR1 -x tint2
+        pgrep -x waybar >/dev/null && pkill -RTMIN+"$waybar_signal" -x waybar
+        pgrep -x sfwbar >/dev/null && pkill -RTMIN+"$sfwbar_signal" -x sfwbar
+    fi
+}
+
+show_menu() {
+    case "$output" in text) flag="t" ;; glyph) flag="f" ;; icon) flag="i" ;; esac
+    menu_list=$(
+        printf "Check updates,%s -u -%s\n" "$scriptname" "$flag"
+        printf "Show updates,%s -n -%s\n" "$scriptname" "$flag"
+        printf "Upgrade,%s -U -%s\n" "$scriptname" "$flag"
+        (exists pacman || [ -n "$custom_clean_cmd" ]) && printf "Empty Cache,%s -e -%s\n" "$scriptname" "$flag"
+        if exists flatpak; then
+            [ "$enable_flatpak" = "true" ] && txt="Disable Flatpak" || txt="Enable Flatpak"
+            printf "%s,%s -p -%s\n" "$txt" "$scriptname" "$flag"
+        fi
+    )
+    printf '%s\n' "$menu_list" | createjgmenu
+}
+
+# -------------------------------------------------------------------
+# EXECUTION
+# -------------------------------------------------------------------
+
+case ${action} in
+    help) show_help ;;
+    check) do_check ;;
+    notify) do_notify ;;
+    upgrade) do_upgrade ;;
+    clean) do_clean ;;
+    toggle_flatpak) do_toggle_flatpak ;;
+    menu) show_menu ;;
+esac#!/bin/sh
+
+# Posix compliant script for Arch based systems.
+# It can also use custom commands to adapt to other distro.
+# Designed for panels and bars like Tint2, Waybar, and SFWBar.
+# Authors: Max Franco <purpleleaf at ganoia.eu>
+# License: GPL3
+
+# Dependencies: jgmenu, dunstify, createjgmenu, yad (optional)
+# Arch and derivatives: pacman-contrib [ yay | paru | trizen | aura ]
+# Optional: a Nerd font of your choice for font glyph output
+
+scriptname=$(basename "$0")
+action=""
+output=""
+
+# -------------------------------------------------------------------
+# EARLY UTILITIES
+# -------------------------------------------------------------------
+
+# Rigoroso nell'incerto: verifica dei comandi standard POSIX
+exists() { 
+    command -v "$1" >/dev/null 2>&1 
+}
+
+# Semplice nel certo: messaggi d'errore diretti (CLI o GUI se disponibile)
+die() { 
+    msg="$1"
+    if exists yad; then
+        yad --form --field="$msg:LBL" \
+            --title="Error" \
+            --window-icon="dialog-error" \
+            --width="500" --center
+    else
+        printf '%s\n' "$msg" 1>&2
+    fi
+    exit 1
+}
+
+# -------------------------------------------------------------------
+# CONFIGURATION & ENVIRONMENT
+# -------------------------------------------------------------------
+
+config_dir="$HOME/.config/pmt2e"
+config="$config_dir/pmu.conf"
+
+terminal_list="xterm $TERMINAL x-terminal-emulator alacritty kitty foot ghostty urxvt rxvt st qterminal gnome-terminal xfce4-terminal mate-terminal terminology"
+
+custom_check_cmd=""
+custom_upgrade_cmd=""
+custom_clean_cmd=""
+refresh_cmd=""
+arch_use_helper="false"
+enable_flatpak="false"
 
 # Terminal detection
 terminal=""
