@@ -40,7 +40,7 @@ die() {
 # -------------------------------------------------------------------
 
 config_dir="$HOME/.config/pmt2e"
-config="$config_dir/pmu.conf"
+config="$config_dir/pmupadater.conf"
 
 terminal_list="xterm $TERMINAL x-terminal-emulator alacritty kitty foot ghostty urxvt rxvt st qterminal gnome-terminal xfce4-terminal mate-terminal terminology"
 
