@@ -15,11 +15,15 @@ lock_file="/tmp/${scriptname}.lock"
 # ---------------------------------------------------------
 # Error handling & Utilities
 # ---------------------------------------------------------
-exists() { command -v "$1" >/dev/null 2>&1; }
+exists() { 
+    command -v "$1" >/dev/null 2>&1 
+}
 
 show_dialog() {
     # If a lock exists, a window is already open. Return silently.
-    [ -f "$lock_file" ] && return
+    if [ -f "$lock_file" ]; then
+        return
+    fi
     
     # Create the lock
     touch "$lock_file"
@@ -50,110 +54,181 @@ die() {
 }
 
 show_help() {
-    cat << EOF
-Usage: $scriptname [Action] | [Output]
-
-PMT2e Brightness Agent - Adjust backlight levels.
-
-ACTIONS (Choose one):
-  -u        Increase brightness by 5%
-  -d        Decrease brightness by 5%
-  -s [0-100] Set brightness to specific percentage
-  -g        Launch external GUI slider (pmgui-scale)
-  -m        Show interactive jgmenu
-  -h        Show this help message and exit
-
-OUTPUT FORMATS:
-  -t        Print text output (Default)
-  -f        Print Nerd Font glyph
-  -i        Print path to brightness SVG icon
-EOF
+    printf "Usage: %s [Action] | [Output]\n\n" "$scriptname"
+    printf "PMT2e Brightness Agent - Adjust backlight levels.\n\n"
+    printf "ACTIONS (Choose one):\n"
+    printf "  -u        Increase brightness by 5%%\n"
+    printf "  -d        Decrease brightness by 5%%\n"
+    printf "  -s [val]  Set brightness to specific percentage (0-100)\n"
+    printf "  -g        Launch external GUI slider (pmgui-scale)\n"
+    printf "  -m        Show interactive jgmenu\n"
+    printf "  -h        Show this help message and exit\n\n"
+    printf "OUTPUT FORMATS:\n"
+    printf "  -t        Print text output (Default)\n"
+    printf "  -f        Print Nerd Font glyph\n"
+    printf "  -i        Print path to brightness SVG icon\n"
+    exit 0
 }
 
 # ---------------------------------------------------------
 # Backlight Backend Detection & Wrappers
 # ---------------------------------------------------------
 get_backend() {
-    if exists light; then BACKEND="light"
-    elif exists brightnessctl; then BACKEND="brightnessctl"
-    elif exists xbacklight; then BACKEND="xbacklight"
-    else BACKEND=""
+    if exists light; then 
+        BACKEND="light"
+    elif exists brightnessctl; then 
+        BACKEND="brightnessctl"
+    elif exists xbacklight; then 
+        BACKEND="xbacklight"
+    else 
+        BACKEND=""
     fi
 }
 
 get_bri() {
-    [ -z "$BACKEND" ] && return 1
+    if [ -z "$BACKEND" ]; then
+        return 1
+    fi
+
     case "$BACKEND" in
-        light)         light -G | cut -d'.' -f1 ;;
-        brightnessctl) brightnessctl -m | cut -d',' -f4 | tr -d '%' ;;
-        xbacklight)    xbacklight -get | cut -d'.' -f1 ;;
+        light)         
+            light -G | cut -d'.' -f1 
+            ;;
+        brightnessctl) 
+            brightnessctl -m | cut -d',' -f4 | tr -d '%' 
+            ;;
+        xbacklight)    
+            xbacklight -get | cut -d'.' -f1 
+            ;;
     esac
 }
 
 set_bri() {
-    [ -z "$BACKEND" ] && die -y "No backlight tool found. Please install 'light', 'brightnessctl', or 'xbacklight'."
-    val="$1"; mode="$2"
+    if [ -z "$BACKEND" ]; then
+        die -y "No backlight tool found. Please install 'light', 'brightnessctl', or 'xbacklight'."
+    fi
+
+    val="$1"
+    mode="$2"
+
     case "$BACKEND" in
         light)
-            case "$mode" in
-                set) light -S "$val" ;;
-                up)  light -A 5 ;;
-                down) light -U 5 ;;
-            esac ;;
+            if [ "$mode" = "set" ]; then
+                light -S "$val"
+            elif [ "$mode" = "up" ]; then
+                light -A 5
+            elif [ "$mode" = "down" ]; then
+                light -U 5
+            fi
+            ;;
         brightnessctl)
-            case "$mode" in
-                set) brightnessctl set "$val%" ;;
-                up)  brightnessctl set +5% ;;
-                down) brightnessctl set 5%- ;;
-            esac ;;
+            if [ "$mode" = "set" ]; then
+                brightnessctl set "$val%"
+            elif [ "$mode" = "up" ]; then
+                brightnessctl set +5%
+            elif [ "$mode" = "down" ]; then
+                brightnessctl set 5%-
+            fi
+            ;;
         xbacklight)
-            case "$mode" in
-                set) xbacklight -set "$val" ;;
-                up)  xbacklight -inc 5 ;;
-                down) xbacklight -dec 5 ;;
-            esac ;;
+            if [ "$mode" = "set" ]; then
+                xbacklight -set "$val"
+            elif [ "$mode" = "up" ]; then
+                xbacklight -inc 5
+            elif [ "$mode" = "down" ]; then
+                xbacklight -dec 5
+            fi
+            ;;
     esac
 }
 
 send_notification() {
-    exists dunstify || return
+    if ! exists dunstify; then
+        return
+    fi
+
     cur=$(get_bri)
-    if [ "$cur" -ge 70 ]; then icon="display-brightness-high-symbolic"
-    elif [ "$cur" -ge 30 ]; then icon="display-brightness-medium-symbolic"
-    else icon="display-brightness-low-symbolic"; fi
+    if [ -z "$cur" ]; then
+        return
+    fi
+
+    if [ "$cur" -ge 70 ]; then 
+        icon="display-brightness-high-symbolic"
+    elif [ "$cur" -ge 30 ]; then 
+        icon="display-brightness-medium-symbolic"
+    else 
+        icon="display-brightness-low-symbolic"
+    fi
+
     dunstify -t 1000 -h string:x-dunst-stack-tag:brightness -i "$icon" -h int:value:"$cur" "Brightness: $cur%"
 }
 
 # ---------------------------------------------------------
 # Execution & Argument Parsing
 # ---------------------------------------------------------
-get_backend
 action=""
-output_format=""
+output="text"
 input_val=""
 
-[ $# -eq 0 ] && output_format="text"
+err_act="Only one action can be chosen: -u -d -s -g -m"
+err_out="Only one output can be chosen: -t -f -i"
 
-while getopts ":huds:iftgm" opt; do
-    case ${opt} in
-        h) show_help; exit 0 ;;
-        u) action="up" ;;
-        d) action="down" ;;
-        s) action="set"; input_val="$OPTARG" ;;
-        g) pmgui-scale -b; exit 0 ;;
-        m) action="menu" ;;
-        i) output_format="icon" ;;
-        f) output_format="glyph" ;;
-        t) output_format="text" ;;
-        \?|*) die "Invalid option. Use -h for help." ;;
+while getopts ":huds:mgift" opt; do
+    case "${opt}" in
+        h) 
+            show_help 
+            ;;
+        u) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="up" 
+            ;;
+        d) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="down" 
+            ;;
+        s) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="set"
+            input_val="$OPTARG" 
+            ;;
+        g) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="gui" 
+            ;;
+        m) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="menu" 
+            ;;
+        t) 
+            output="text" 
+            ;;
+        f) 
+            if [ "$output" != "text" ]; then die "$err_out"; fi
+            output="glyph" 
+            ;;
+        i) 
+            if [ "$output" != "text" ]; then die "$err_out"; fi
+            output="icon" 
+            ;;
+        \?|*) 
+            die "Invalid option. Use -h for help." 
+            ;;
     esac
 done
 
+get_backend
+
+# --- Handle Actions ---
 if [ -n "$action" ]; then
     case "$action" in
-        up)   set_bri "" "up" ;;
-        down) set_bri "" "down" ;;
-        set)  set_bri "$input_val" "set" ;;
+        gui)
+            if exists pmgui-scale; then
+                pmgui-scale -b
+            else
+                die -y "pmgui-scale utility not found."
+            fi
+            exit 0
+            ;;
         menu) 
             menu_list=$(
                 printf "Brightness GUI,pmgui-scale -b\n"
@@ -167,195 +242,49 @@ if [ -n "$action" ]; then
             printf '%s\n' "$menu_list" | createjgmenu
             exit 0
             ;;
-    esac
-    send_notification
-    [ -z "$output_format" ] && exit 0
-fi
-
-if [ -n "$output_format" ]; then
-    bri=$(get_bri)
-    if [ $? -ne 0 ] || [ -z "$BACKEND" ]; then
-        case "$output_format" in
-            text)  printf 'Bri: N/A\n' ;;
-            glyph) printf '󰃠 <span color="red">󱈸</span>\n' ;;
-            icon)  printf '%s/bri-error.svg\n' "$iconpath" ;;
-        esac
-        exit 0
-    fi
-
-    case "$output_format" in
-        text)  printf 'Bri: %s%%\n' "$bri" ;;
-        glyph)
-            if [ "$bri" -ge 66 ]; then g="󰃠"
-            elif [ "$bri" -ge 33 ]; then g="󰃟"
-            else g="󰃞"; fi
-            printf '%s\n' "$g"
-            ;;
-        icon)
-            if [ "$bri" -ge 90 ]; then n="bri-full.svg"
-            elif [ "$bri" -ge 50 ]; then n="bri-high.svg"
-            elif [ "$bri" -ge 30 ]; then n="bri-medium.svg"
-            else n="bri-low.svg"; fi
-            printf '%s/%s\n' "$iconpath" "$n"
+        up|down|set)
+            set_bri "$input_val" "$action"
+            send_notification
+            # Actions do not print output unless requested manually by panel scripts
+            exit 0
             ;;
     esac
-fi#!/bin/bash
-
-# This script displays an appropriate brightness icon according to the brightness level by `xbacklight` command
-
-# Author: purpleleaf
-# e-mail: max@ganoia.eu
-# Project: https://github.com/purpleleaf/pmt2e
-# License: GPL3
-
-# Dependencies: xbacklight dunst
-
-scriptname=`basename $0`
-action=""
-output=""
-
-die() { echo "$*" 1>&2 ; exit 1; }
-help_error_action="Only one action can be chosen between -h -s -u -d"
-help_error_output="Only one action can be chosen between -i -f -t"
-
-while getopts ":huds:iftx" opt; do
-  case ${opt} in
-# allow only one action between help, set, up, down, toggle
-    h)
-      [ -n "$action" ] && die "${help_error_action}"
-      action="help"
-	  output="help"
-      ;;
-    s)
-      [ -n "$action" ] && die "${help_error_action}"
-      action="set"
-      if [[ "$OPTARG" =~ ^[0-9]+$ ]] && [[ "$OPTARG" -ge 0 ]] && [[ "$OPTARG" -le 100 ]]; then
-      input_bri="$OPTARG"
-      else
-        die "error: -s argument is not a valid number" 
-      fi
-      ;;
-    u)
-      [ -n "$action" ] && die "${help_error_action}"
-      action="up"
-      ;;
-    d)
-      [ -n "$action" ] && die "${help_error_action}"
-      action="down"
-      ;;
-# allow only one option between icon, text or font glyph
-    i)
-      [ -n "$output" ] && die "${help_error_output}"
-      output="icon"
-      ;;
-    f)
-      [ -n "$output" ] && die "${help_error_output}"
-      output="glyph"
-      ;;
-    t)
-      [ -n "$output" ] && die "${help_error_output}"
-      output="text"
-      ;;
-    x)
-      [ -n "$output" ] && die "${help_error_output}"
-      output="nooutput"
-      ;;
-# require an argument for -s option 
-    :)
-      die "Option -"$OPTARG" requires an argument"
-      ;;
-    *)
-      die "Invalid option -"$OPTARG""
-      ;;
-  esac
-done
-
-# exit if $action and/or $output are not set
-if [[ ! -n "$action" ]] || [[ ! -n "$output" ]]; then
-die "$scriptname requires both an action [-h | -s | -u | -d ] and an output [-i | -f | -t] option. \
-Please run \"$scriptname -h\" for usage."
 fi
 
-show_help () {
-  printf -- "\nUsage: $scriptname [ -h | -s | -u | -d ] [ -i | -f | -t ]\n"
-  printf -- "\n"
-  printf -- "  -h, Show this help message and exit.\n"
-  printf -- "  -s, set brightness to the number passed as argument.\n"
-  printf -- "  -u, raise brightness.\n"
-  printf -- "  -d, lower brightness.\n"
-  printf -- "  -i, output an icon path to Tint2.\n"
-  printf -- "  -f, output a font glyph instead of icon.\n"
-  printf -- "  -t, output text instead of icon.\n"
-  printf -- "  -x, no output, for use outside of tint2.\n"
-  printf -- "Only one option for both the two option group must be provided.\n"
-  printf -- "If -s is selected an integer number (0-100) must be provided.\n"
-  printf -- "If -h is selected no other option is required.\n\n"
-  exit 0	
-}
+# --- Handle Continuous Output (Status Bar) ---
+bri=$(get_bri)
 
-function send_notification {
-    dunstify -i $2 -t 1000 -h string:x-dunst-stack-tag:brightness -u normal "$1%" -h int:value:$1
-}
-
-b=$(xbacklight -get)
-bri=$(echo $b | awk '{ printf"%0.0f\n", $1 }')
-
-function get_icon {
-if [[ "$bri" -gt "90" ]]; then
-  icon="/usr/share/pmt2e/icons/bri-full.svg"
-elif [[ "$bri" -gt "50" ]]; then
-  icon="/usr/share/pmt2e/icons/bri-high.svg"
-elif [[ "$bri" -gt "30" ]]; then
-  icon="/usr/share/pmt2e/icons/bri-medium.svg"
-else
-  icon="/usr/share/pmt2e/icons/bri-low.svg"
-fi
-echo ${icon}
-}
-
-function get_glyph {
-if [[ ${bri} -ge 66 ]]; then
-  glyph="󰃚"
-elif [[ ${bri} -ge 33 ]]; then
-  glyph="󰃛"
-else
-  glyph="󰃜"
-fi
-echo ${glyph} 
-}
-
-briicon=$(get_icon)
-
-case ${action} in
-  help)
-    show_help
-    exit
-    ;;
-  set)
-    xbacklight -set "${input_bri}"
-    send_notification ${input_bri} ${briicon}
-    ;;
-  up)
-    xbacklight +5
-    send_notification ${bri} ${briicon}
-    ;;
-  down)
-    xbacklight -5
-    send_notification ${bri} ${briicon}
-    ;;
-esac
-
-case $output in
-  glyph)
-    get_glyph
-    ;;
-  text)
-    echo "Bri: ${bri}%"
-    ;;
-  icon)
-    get_icon
-    ;;
-  nooutput)
+if [ $? -ne 0 ] || [ -z "$BACKEND" ]; then
+    case "$output" in
+        text)  printf 'Bri: N/A\n' ;;
+        glyph) printf '󰃠 <span color="red">󱈸</span>\n' ;;
+        icon)  printf '%s/bri-error.svg\n' "$iconpath" ;;
+    esac
     exit 0
-    ;;
+fi
+
+case "$output" in
+    text)  
+        printf 'Bri: %s%%\n' "$bri" 
+        ;;
+    glyph)
+        if [ "$bri" -ge 66 ]; then 
+            printf '󰃠\n'
+        elif [ "$bri" -ge 33 ]; then 
+            printf '󰃟\n'
+        else 
+            printf '󰃞\n'
+        fi
+        ;;
+    icon)
+        if [ "$bri" -ge 90 ]; then 
+            printf '%s/bri-full.svg\n' "$iconpath"
+        elif [ "$bri" -ge 50 ]; then 
+            printf '%s/bri-high.svg\n' "$iconpath"
+        elif [ "$bri" -ge 30 ]; then 
+            printf '%s/bri-medium.svg\n' "$iconpath"
+        else 
+            printf '%s/bri-low.svg\n' "$iconpath"
+        fi
+        ;;
 esac
