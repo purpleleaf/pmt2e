@@ -8,7 +8,7 @@
 #                John D. Martin III (original open weather parser) - https://github.com/jdmar3/galo.sh
 # Icons by     : Amchart (https://www.amcharts.com)
 #                JoshuaKimsey (https://github.com/JoshuaKimsey/amCharts-SVG-Icons-Additions)
-# Dependencies : curl, jq, yad, dunstify, jgmenu
+# Dependencies : curl, jq, yad, dunstify, jgmenu, pkill
 # ==============================================================================
 
 iconpath="/usr/share/pmt2e/wheather_icons"
@@ -29,13 +29,18 @@ die() {
     exit 1
 }
 
-for req in curl jq yad dunstify jgmenu; do
+for req in curl jq yad dunstify jgmenu pkill; do
     if ! exists "$req"; then
         die "Error: dependency '$req' is not installed."
     fi
 done
 
 sys_lang=$(printf '%s' "${LANG:-en}" | cut -d_ -f1 | cut -d. -f1)
+
+# Default panel signals (Must be distinct from pmupdater)
+waybar_signal="9"
+sfwbar_signal="5"
+refresh_cmd=""
 
 show_help() {
     printf "==============================================================\n"
@@ -61,6 +66,25 @@ show_help() {
     printf "  %s -t          # Print textual description\n" "$scriptname"
     printf "==============================================================\n"
     exit 0
+}
+
+send_refresh_signals() {
+    if [ -n "$refresh_cmd" ]; then
+        eval "$refresh_cmd"
+        return
+    fi
+
+    if pgrep -x tint2 >/dev/null; then
+        pkill -USR1 -x tint2
+    fi
+
+    if pgrep -x waybar >/dev/null; then
+        pkill -RTMIN+"$waybar_signal" -x waybar
+    fi
+
+    if pgrep -x sfwbar >/dev/null; then
+        pkill -RTMIN+"$sfwbar_signal" -x sfwbar
+    fi
 }
 
 # ---------------------------------------------------------
@@ -131,8 +155,11 @@ temp_unit="$t_unit"
 icon_type="$i_style"
 windspeed_unit="kmh"
 precipitation_unit="mm"
+waybar_signal="${waybar_signal}"
+sfwbar_signal="${sfwbar_signal}"
 EOF
             yad --info --text="Saved: $loc" --borders=15
+            send_refresh_signals
             break
         fi
     done
