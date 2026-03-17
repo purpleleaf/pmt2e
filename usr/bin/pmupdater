@@ -176,8 +176,8 @@ while getopts ":huUmniftpe" opt; do
         t)
             output="text"
             ;;
-        *)
-            die "Invalid option -$OPTARG"
+        \?|*)
+            die "Invalid option. Use -h for help." 
             ;;
     esac
 done
