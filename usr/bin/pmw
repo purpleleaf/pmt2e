@@ -1,563 +1,370 @@
-#!/bin/bash
+#!/bin/sh
+# ==============================================================================
+# Script Name  : pmweather
+# Description  : PMT2e Weather Agent - Unified and POSIX compliant
+# Author       : Max Franco <purpleleaf at ganoia.eu>
+# License      : GPL-3.0
+# Credits      : nilsonmorale (ywtray settings concept) - https://github.com/Dimorld/ywtray
+#                John D. Martin III (original open weather parser) - https://github.com/jdmar3/galo.sh
+# Icons by     : Amchart (https://www.amcharts.com)
+#                JoshuaKimsey (https://github.com/JoshuaKimsey/amCharts-SVG-Icons-Additions)
+# Dependencies : curl, jq, yad, dunstify, jgmenu
+# ==============================================================================
 
-# Author: purpleleaf <max at ganoia dot eu>
-# Thanks to nilsonmorale for Yay settings scripts and other code I 'stole' from ywtray :)
-# https://github.com/Dimorld/ywtray
-# Thanks to  John D. Martin III  for the original open weather parser
-# https://github.com/jdmar3/galo.sh
-# Icons by:
-# Amchart - https://www.amcharts.com
-# JoshuaKimsey - https://github.com/JoshuaKimsey/amCharts-SVG-Icons-Additions
+iconpath="/usr/share/pmt2e/wheather_icons"
+scriptname=$(basename "$0")
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
+config_file="$config_dir/pmweather.conf"
+lock_file="/tmp/${scriptname}.lock"
 
-# Dependencies: curl, jq, yad, awk
-
-declare -a weather_data       # array to store data variables requested to open-meteo
-day=0 # Set default day to today for open-meteo settings
-timezone=$(/bin/ls -l /etc/localtime|/usr/bin/cut -d"/" -f7,8) # Set default time zone from system
-
-show_help () {
-  printf -- "\nUsage: $0 -h | -n | -m | -t\n"
-  printf -- "\n"
-  printf -- "  -h, Show this help message and exit.\n"
-  printf -- "  -n, Show notification.\n"
-  printf -- "  -m, Show jgmenu.\n"
-  printf -- "  -t, show only text as tint2 executor output.\n\n"
-  printf -- "If multiple arguments are provided, only the first one will considered\n"
-  printf -- "Without arguments outputs weather icon to use with tint2 executor.\n\n"
-	exit 0	
+# ---------------------------------------------------------
+# Utilities & Requirements Check
+# ---------------------------------------------------------
+exists() { 
+    command -v "$1" >/dev/null 2>&1 
 }
 
-while getopts ":tnhm" opt; do
-  case ${opt} in
-    h)
-	  show_help
-	  exit
-      ;;
-    n)
-	  show_notification=true
-      break
-      ;;
-    t)
-      show_text=true
-      break
-      ;;
-    m)
-	  show_menu=true
-      break
-      ;;
-    *)
-      echo "Invalid option: -$OPTARG"
-      exit 1
-      ;;
-  esac
+die() {
+    printf '%s\n' "$*" 1>&2
+    exit 1
+}
+
+for req in curl jq yad dunstify jgmenu; do
+    if ! exists "$req"; then
+        die "Error: dependency '$req' is not installed."
+    fi
 done
 
-if [[ ${show_menu} == "true" ]]; then
-    createjgmenu "Settings, pmw-settings" 'About, sh -c  $(yad --image="gtk-about" --on-top --button="yad-ok:0" --center --text="PMT2e - Poor Man Tint2 executors\n\nBash scripts to add some useful \"executors\" to Tint2 panel.\n\nAuthor: purpleaf")'
-    exit
-fi
+sys_lang=$(printf '%s' "${LANG:-en}" | cut -d_ -f1 | cut -d. -f1)
 
-# function to show yad dialog error 
-show_errors () {
-local text="$1"
-yad --splash --image="gtk-dialog-warning" --on-top \
---button="yad-ok:0" --center \
---text="${text}"
-exit 1
+show_help() {
+    printf "==============================================================\n"
+    printf " %s - PMT2e Weather Agent\n" "$scriptname"
+    printf "==============================================================\n"
+    printf "Usage: %s [ACTION] [OUTPUT_FORMAT]\n\n" "$scriptname"
+    printf "DESCRIPTION:\n"
+    printf "  A unified, POSIX-compliant weather agent that fetches\n"
+    printf "  forecasts, displays notifications, and provides a GUI.\n\n"
+    printf "ACTIONS:\n"
+    printf "  -n    Show desktop notification with current weather info.\n"
+    printf "  -F    Show 3-day forecast in a rich YAD GUI table.\n"
+    printf "  -c    Open the configuration GUI to set location and units.\n"
+    printf "  -m    Show the jgmenu context menu.\n"
+    printf "  -h    Show this extensive help message and exit.\n\n"
+    printf "OUTPUT FORMATS (Default is -i):\n"
+    printf "  -t    Print the weather description as plain text.\n"
+    printf "  -g    Print the Nerd Font weather glyph.\n"
+    printf "  -i    Print the full path to the SVG weather icon.\n\n"
+    printf "EXAMPLES:\n"
+    printf "  %s -n          # Show a weather notification\n" "$scriptname"
+    printf "  %s -c          # Configure your city/location\n" "$scriptname"
+    printf "  %s -t          # Print textual description\n" "$scriptname"
+    printf "==============================================================\n"
+    exit 0
 }
 
-# Import pmw.conf variables
-source ~/.config/pmt2e/pmw.conf 2> /dev/null || \
-{
-if [ ! -d $HOME/.config/pmt2e ]; then 
-	mkdir -p $HOME/.config/pmt2e; 
-fi; 
-pmw-settings; 
-source ~/.config/pmt2e/pmw.conf 2> /dev/null || exit 1 
-}
-
-# check if settings exist
-settings_error="There are problems with your PMW settings. \n Please delete $HOME/.config/pmt2e/pmw.conf \nand run pmw again."
-
-[[ -n "${latitude}" && -n "${longitude}" && -n "${location}" && -n "${temp_unit}" && -n "${windspeed_unit}" && -n "${precipitation_unit}" && -n "${icon_type}" && -n "${notification_icon_type}" ]] || show_errors "${settings_error}"
-
-if [ ${temp_unit} == "celsius" ]; then temp_degree="°C"; elif [ ${temp_unit} == "fahrenheit" ]; then temp_degree="°F"; fi
-
-if [[ ${icon_type} == "monochrome" ]]; then
-    icons_dir="/usr/share/pmt2e/wheather_icons/dark" 
-elif [[ ${icon_type} == "coloured" ]]; then
-    icons_dir="/usr/share/pmt2e/wheather_icons" 
-else
-	show_glyphs=true
-fi
-
-if [[ ${notification_icon_type} == "monochrome" ]]; then
-    notification_icons_dir="/usr/share/pmt2e/wheather_icons/dark" 
-else
-    notification_icons_dir="/usr/share/pmt2e/wheather_icons" 
-fi
-
-[[ ${show_notification} == "true" ]] || [[ ${show_menu} == "true" ]] || \
-{
-  if [[ ${show_text} == "true" ]]; then
-	echo "Loading..."
-  elif [[ ${show_glyphs} == "true" ]]; then
-	echo ""
-  else
-    echo "${icons_dir}/refresh.svg"
-fi
-}
-
-# translates the weather api's code numbers to text, and determines icons to use 
-function weather_icon_descriptor () {
-    local epoch_time="$(date "+%s")" 
- 	local wc=$1
-	local array_name=$2
-	local wicon
-	local wtext
-    if [[ "${epoch_time}" -ge "$(date -d "${sunrise}" "+%s")" &&  "${epoch_time}" -le "$(date -d "${sunset}" +%s)" ]] ; then  
-
-    # Daytime icons and short weather descriptions
-      case "${wc}" in
-        0)
-            wicon="clear-day.svg"
-            wtext="Clear sky"
-            wglyph=""
-            ;;
-        1)
-            wicon="fair-day.svg"
-            wtext="Mainly clear"
-            wglyph=""
-            ;;
-        2)
-            wicon="cloudy-2-day.svg"
-            wtext="Partly cloudy"
-            wglyph=""
-            ;;
-        3)
-            wicon="cloudy.svg"
-            wtext="Overcast"
-            wglyph=""
-            ;;
-        45)
-            wicon="fog.svg"
-            wtext="Fog"
-            wglyph=""
-            ;;
-        48)
-            wicon="fog.svg"
-            wtext="Rime fog"
-            wglyph=""
-            ;;
-        51)
-            wicon="rainy-1-day.svg"
-            wtext="Light drizzle"
-            wglyph=""
-            ;;
-        53)
-            wicon="rainy-2-day.svg"
-            wtext="Moderate drizzle"
-            wglyph=""
-            ;;
-        55)
-            wicon="rainy-3-day.svg"
-            wtext="Intense drizzle"
-            wglyph=""
-            ;;
-        56)
-            wicon="rain-and-sleet.svg"
-            wtext="Light freezing drizzle"
-            wglyph=""
-            ;;
-        57)
-            wicon="rain-and-sleet.svg"
-            wtext="Intense freezing drizzle"
-            wglyph=""
-            ;;
-        61)
-            wicon="rainy-1.svg"
-            wtext="Slight rain"
-            wglyph=""
-            ;;
-        63)
-            wicon="rainy-2.svg"
-            wtext="Moderate rain"
-            wglyph=""
-            ;;
-        65)
-            wicon="rainy-3.svg"
-            wtext="Intense rain"
-            wglyph=""
-            ;;
-        66)
-            wicon="rain-and-sleet.svg"
-            wtext="Light freezing rain"
-            wglyph=""
-            ;;
-        67)
-            wicon="rain-and-sleet.svg"
-            wtext="Intense freezing rain"
-            wglyph=""
-            ;;
-        71)
-            wicon="snowy-1-day.svg"
-            wtext="Slight snow fall"
-            wglyph=""
-            ;;
-        73)
-            wicon="snowy-2-day.svg"
-            wtext="Moderate snow fall"
-            wglyph=""
-            ;;
-        75)
-            wicon="snowy-3-day.svg"
-            wtext="Intense snow fall"
-            wglyph=""
-            ;;
-        77)
-            wicon="snow-and-sleet.svg"
-            wtext="Snow grains"
-            wglyph=""
-            ;;
-        80)
-            wicon="rainy-1.svg"
-            wtext="Slight rain showers"
-            wglyph=""
-            ;;
-        81)
-            wicon="rainy-2.svg"
-            wtext="Moderate rain showers"
-            wglyph=""
-            ;;
-        82)
-            wicon="rainy-3.svg"
-            wtext="Intense rain showers"
-            wglyph=""
-            ;;
-        85)
-            wicon="snowy-1.svg"
-            wtext="Slight snow showers"
-            wglyph=""
-            ;;
-        86)
-            wicon="snowy-3.svg"
-            wtext="Heavy snow showers"
-            wglyph=""
-            ;;
-        95)
-            wicon="scattered-thunderstorms.svg"
-            wtext="Thunderstorm"
-            wglyph=""
-            ;;
-         96)
-            wicon="thunderstorms.svg"
-            wtext="Thunderstorm with slight hail"
-            wglyph=""
-            ;;
-        99)
-            wicon="thunderstorms.svg"
-            wtext="Thunderstorm with heavy hail"
-            wglyph=""
-            ;;
-        *)
-            wicon="default-no.svg"
-            wtext="unknown"
-            wglyph="󰨹"
-            ;;
-      esac
-# Night Time Icons    
-    else
-      case "${wc}" in
-        0)
-            wicon="clear-night.svg"
-            wtext="Clear sky"
-            wglyph=""
-            ;;
-        1)
-            wicon="fair-night.svg"
-            wtext="Mainly clear"
-            wglyph=""
-            ;;
-        2)
-            wicon="cloudy-2-night.svg"
-            wtext="Partly cloudy"
-            wglyph=""
-            ;;
-        3)
-            wicon="cloudy.svg"
-            wtext="Overcast"
-            wglyph=""
-            ;;
-        45)
-            wicon="fog.svg"
-            wtext="Fog"
-            wglyph=""
-            ;;
-        48)
-            wicon="fog.svg"
-            wtext="Rime fog"
-            wglyph=""
-            ;;
-        51)
-            wicon="rainy-1-night.svg"
-            wtext="Light drizzle"
-            wglyph=""
-            ;;
-        53)
-            wicon="rainy-2-night.svg"
-            wtext="Moderate drizzle"
-            wglyph=""
-            ;;
-        55)
-            wicon="rainy-3-night.svg"
-            wtext="Intense drizzle"
-            wglyph=""
-            ;;
-        56)
-            wicon="rain-and-sleet.svg"
-            wtext="Light freezing drizzle"
-            wglyph=""
-            ;;
-        57)
-            wicon="rain-and-sleet.svg"
-            wtext="Intense freezing drizzle"
-            wglyph=""
-            ;;
-        61)
-            wicon="rainy-1.svg"
-            wtext="Slight rain"
-            wglyph=""
-            ;;
-        63)
-            wicon="rainy-2.svg"
-            wtext="Moderate rain"
-            wglyph=""
-            ;;
-        65)
-            wicon="rainy-3.svg"
-            wtext="Intense rain"
-            wglyph=""
-            ;;
-        66)
-            wicon="rain-and-sleet.svg"
-            wtext="Light freezing rain"
-            wglyph=""
-            ;;
-        67)
-            wicon="rain-and-sleet.svg"
-            wtext="Intense freezing rain"
-            wglyph=""
-            ;;
-        71)
-            wicon="snowy-1-day.svg"
-            wtext="Slight snow fall"
-            wglyph=""
-            ;;
-        73)
-            wicon="snowy-2-day.svg"
-            wtext="Moderate snow fall"
-            wglyph=""
-            ;;
-        75)
-            wicon="snowy-3-day.svg"
-            wtext="Intense snow fall"
-            wglyph=""
-            ;;
-        77)
-            wicon="snow-and-sleet.svg"
-            wtext="Snow grains"
-            wglyph=""
-            ;;
-        80)
-            wicon="rainy-1.svg"
-            wtext="Slight rain showers"
-            wglyph=""
-            ;;
-        81)
-            wicon="rainy-2.svg"
-            wtext="Moderate rain showers"
-            wglyph=""
-            ;;
-        82)
-            wicon="rainy-3.svg"
-            wtext="Intense rain showers"
-            wglyph=""
-            ;;
-        85)
-            wicon="snowy-1.svg"
-            wtext="Slight snow showers"
-            wglyph=""
-            ;;
-        86)
-            wicon="snowy-3.svg"
-            wtext="Heavy snow showers"
-            wglyph=""
-            ;;
-        95)
-            wicon="scattered-thunderstorms.svg"
-            wtext="Thunderstorm"
-            wglyph=""
-            ;;
-         96)
-            wicon="thunderstorms.svg"
-            wtext="Thunderstorm with slight hail"
-            wglyph=""
-            ;;
-        99)
-            wicon="thunderstorms.svg"
-            wtext="Thunderstorm with heavy hail"
-            wglyph=""
-            ;;
-        *)
-            wicon="default-no.svg"
-            wtext="unknown"
-            wglyph="󰨹"
-            ;;
-      esac       
+# ---------------------------------------------------------
+# Configuration & Geocoding
+# ---------------------------------------------------------
+search_location() {
+    search_term="$1"
+    results=$(curl -s -A "PMT2e-Weather-Agent" \
+        "https://nominatim.openstreetmap.org/search?q=${search_term}&format=json&limit=5")
+    
+    if [ -z "$results" ] || [ "$results" = "[]" ]; then
+        return 1
     fi
-	declare -A -g "$array_name"
-	read $array_name["icon"] <<< "$wicon"
-	read $array_name["text"] <<< "$wtext"
-	read $array_name["glyph"] <<< "$wglyph"
+    printf '%s' "$results" | jq -r '.[] | "\(.lat)|\(.lon)|\(.display_name)"'
 }
 
-function deg_to_direction() {
-  local deg=$1
-  # N 348.75 - 11.25
-  if [[ "${deg}" -ge 348 ]] || [[ "${deg}" -le 11 ]];  then
-    echo "N"
-  # NNE 11.25 - 33.75
-  elif [[ "${deg}" -gt 11 ]] && [[ "${deg}" -lt 34 ]];  then
-    echo "NNE"
-  # NE 33.75 - 56.25
-  elif [[ "${deg}" -ge 34 ]] && [[ "${deg}" -lt 56 ]]; then
-    echo "NE"
-  # ENE 56.25 - 78.75
-  elif [[ "${deg}" -ge 56 ]] && [[ "${deg}" -lt 78 ]]; then
-    echo "ENE"
-  # E 78.75 - 101.25
-  elif [[ "${deg}" -ge 78 ]] && [[ "${deg}" -lt 101 ]]; then
-    echo "E"
-  # ESE 101.25 - 123.75
-  elif [[ "${deg}" -ge 101 ]] && [[ "${deg}" -lt 123 ]]; then
-    echo "ESE"
-  # SE 123.75 - 146.25
-  elif [[ "${deg}" -ge 123 ]] && [[ "${deg}" -lt 146 ]]; then
-    echo "SE"
-  # SSE 146.25 - 168.75
-  elif [[ "${deg}" -ge 146 ]] && [[ "${deg}" -lt 168 ]]; then
-    echo "SSE"
-  # S 168.75 - 191.25
-  elif [[ "${deg}" -ge 168 ]] && [[ "${deg}" -lt 191 ]]; then
-    echo "S"
-  # SSW 191.25 - 213.75
-  elif [[ "${deg}" -ge 191 ]] && [[ "${deg}" -lt 213 ]]; then
-    echo "SSW"
-  # SW 213.75 - 236.25
-  elif [[ "${deg}" -ge 213 ]] && [[ "${deg}" -lt 236 ]]; then
-    echo "SW"  
-  # WSW 236.25 - 258.75
-  elif [[ "${deg}" -ge 236 ]] && [[ "${deg}" -lt 258 ]]; then
-    echo "WSW" 
-  # W 258.75 - 281.25
-  elif [[ "${deg}" -ge 258 ]] && [[ "${deg}" -lt 281 ]]; then
-    echo "W" 
-  # WNW 281.25 - 303.75
-  elif [[ "${deg}" -ge 281 ]] && [[ "${deg}" -lt 303 ]]; then
-    echo "WNW" 
-  # NW 303.75 - 326.25
-  elif [[ "${deg}" -ge 303 ]] && [[ "${deg}" -lt 326 ]]; then
-    echo "NW" 
-  # NNW 326.25 - 348.75
-  elif [[ "${deg}" -ge 326 ]] && [[ "${deg}" -lt 348 ]]; then
-    echo "NW" 
-  else
-    echo "N/A"
-  fi
+do_config() {
+    if [ -f "$lock_file" ]; then 
+        return
+    fi
+    touch "$lock_file"
+
+    if [ -f "$config_file" ]; then 
+        . "$config_file"
+    fi
+
+    while true; do
+        new_configs=$(yad --title="Weather Settings" \
+            --window-icon="${iconpath}/cloudy.svg" \
+            --form --columns=2 \
+            --field="City/Location:" "${location}" \
+            --field="Temp Unit:CB" "${temp_unit:-celsius}!celsius!fahrenheit" \
+            --field="Icon Style:CB" "${icon_type:-coloured}!coloured!monochrome!glyphs" \
+            --field='!gtk-find!Search':BTN "sh -c 'exit 0'" \
+            --field='!gtk-help!Location':BTN "yad --info --text='Enter city and Search. Pick from list.' --borders=15" \
+            --button="Save:0" --button="Cancel:1" \
+            --borders=15)
+
+        if [ $? -ne 0 ]; then 
+            break
+        fi
+
+        loc=$(printf '%s' "$new_configs" | cut -d'|' -f1)
+        t_unit=$(printf '%s' "$new_configs" | cut -d'|' -f2)
+        i_style=$(printf '%s' "$new_configs" | cut -d'|' -f3)
+
+        search_results=$(search_location "$loc")
+        if [ $? -ne 0 ]; then
+            yad --error --text="Location not found." --borders=15
+            continue
+        fi
+
+        selection=$(printf '%s' "$search_results" | yad --list \
+            --title="Select Exact Location" \
+            --column="Lat" --column="Lon" --column="Address" \
+            --width=750 --height=350 --borders=15)
+
+        if [ $? -eq 0 ] && [ -n "$selection" ]; then
+            lat=$(printf '%s' "$selection" | cut -d'|' -f1)
+            lon=$(printf '%s' "$selection" | cut -d'|' -f2)
+            
+            mkdir -p "$config_dir"
+            cat <<EOF > "$config_file"
+latitude="$lat"
+longitude="$lon"
+location="$loc"
+temp_unit="$t_unit"
+icon_type="$i_style"
+windspeed_unit="kmh"
+precipitation_unit="mm"
+EOF
+            yad --info --text="Saved: $loc" --borders=15
+            break
+        fi
+    done
+    rm -f "$lock_file"
 }
 
-# create a temp file to store open-meteo data
-weather_file=$(mktemp -t open-meteo.XXXXXXXXXX)
+# ---------------------------------------------------------
+# Weather Engine Mapping
+# ---------------------------------------------------------
+get_info_by_code() {
+    code="$1"
+    day_state="$2"
+    
+    case "$code" in
+        0) 
+            if [ "$day_state" = "1" ]; then
+                if [ "$sys_lang" = "it" ]; then
+                    d="Sereno"
+                else
+                    d="Clear sky"
+                fi
+                echo "clear-day.svg||$d"
+            else
+                if [ "$sys_lang" = "it" ]; then
+                    d="Sereno"
+                else
+                    d="Clear sky"
+                fi
+                echo "clear-night.svg||$d"
+            fi
+            ;;
+        1|2|3)
+            if [ "$sys_lang" = "it" ]; then
+                d="Nuvoloso"
+            else
+                d="Cloudy"
+            fi
+            
+            if [ "$day_state" = "1" ]; then
+                echo "cloudy-2-day.svg||$d"
+            else
+                echo "cloudy-2-night.svg||$d"
+            fi
+            ;;
+        45|48)
+            if [ "$sys_lang" = "it" ]; then
+                d="Nebbia"
+            else
+                d="Fog"
+            fi
+            echo "fog.svg||$d"
+            ;;
+        51|53|55|61|63|65)
+            if [ "$sys_lang" = "it" ]; then
+                d="Pioggia"
+            else
+                d="Rain"
+            fi
+            echo "rainy-3.svg||$d"
+            ;;
+        71|73|75)
+            if [ "$sys_lang" = "it" ]; then
+                d="Neve"
+            else
+                d="Snow"
+            fi
+            echo "snowy-3.svg||$d"
+            ;;
+        *)
+            if [ "$sys_lang" = "it" ]; then
+                d="Sconosciuto"
+            else
+                d="Unknown"
+            fi
+            echo "default-no.svg|󰨹|$d"
+            ;;
+    esac
+}
 
-# getting http response as output, redirecting json content to file
-open_meteo_response=$(
-  curl -s -G --output ${weather_file} --write-out %{http_code} \
-    -d "latitude=${latitude}" \
-    -d "longitude=${longitude}" \
-    -d "daily=weathercode,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_sum,precipitation_probability_max,windspeed_10m_max,winddirection_10m_dominant" \
-    -d "current=temperature_2m,relative_humidity_2m,precipitation,weathercode,cloud_cover,wind_speed_10m,wind_direction_10m" \
-    -d "temperature_unit=${temp_unit}&windspeed_unit=${windspeed_unit}&precipitation_unit=${precipitation_unit}" \
-    -d "timezone=${timezone}&forecast_days=1" \
-    https://api.open-meteo.com/v1/forecast
-)
+# ---------------------------------------------------------
+# Execution Logic
+# ---------------------------------------------------------
+action=""
+output_format="icon"
+err_act="Only one action can be chosen: -n -F -c -m"
+err_out="Only one output can be chosen: -t -g -i"
 
-weather_data=$(cat ${weather_file})
-rm ${weather_file}
+while getopts ":nFmtgich" opt; do
+    case ${opt} in
+        h) 
+            show_help 
+            ;;
+        n) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="notify" 
+            ;;
+        F) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="forecast" 
+            ;;
+        c) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="config" 
+            ;;
+        m) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="menu" 
+            ;;
+        t) 
+            if [ "$output_format" != "icon" ]; then die "$err_out"; fi
+            output_format="text" 
+            ;;
+        g) 
+            if [ "$output_format" != "icon" ]; then die "$err_out"; fi
+            output_format="glyph" 
+            ;;
+        i) 
+            output_format="icon" 
+            ;;
+        \?|*) 
+            die "Argument error. Use -h for help." 
+            ;;
+    esac
+done
 
-# check http output
-if [ ${open_meteo_response} -ne "200" ]; then
-	if [[  ${weather_data} == *"error"* ]]; then
-		# Query malformed, json reports errors
-		show_errors "PM Weather - Query error."
-	else
-		# Other http errors 
-		show_errors "PM Weather - Http Error ${open_meteo_response}"
-	fi
-	show_errors "PM Weather -  Something went wrong!"
+if [ -f "$config_file" ]; then 
+    . "$config_file"
 else
-	#check if json contains necessary data
-	if [[  ${weather_data} != *"current"* ]] || [[  ${weather_data} != *"daily_units"* ]] ; then   
-		show_errors "PM Weather - No useful json data"
-	fi
+    if [ "$action" != "config" ] && [ "$action" != "menu" ] && [ "$action" != "help" ]; then
+        do_config
+        if [ -f "$config_file" ]; then
+            . "$config_file"
+        else
+            exit 1
+        fi
+    fi
 fi
 
-# Extract current weather variables
-current_temp=$(jq -r -c ".current.temperature_2m" <<< ${weather_data})
-current_wind_speed=$(jq -r -c ".current.wind_speed_10m" <<< ${weather_data})
-current_wind_direction=$(jq -r -c ".current.wind_direction_10m" <<< ${weather_data})
-current_cloud_cover=$(jq -r -c ".current.cloud_cover" <<< ${weather_data})
-current_weathercode=$(jq -r -c ".current.weathercode" <<< ${weather_data})
-relative_humidity=$(jq -r -c ".current.relative_humidity_2m" <<< ${weather_data})
-precipitation=$(jq -r -c ".current.precipitation" <<< ${weather_data})
-# Extract forecast variables
-sunset=$(jq -r -c ".daily.sunset[${day}]" <<< ${weather_data})
-sunrise=$(jq -r -c ".daily.sunrise[${day}]" <<< ${weather_data})
-precip_sum=$(jq -r -c ".daily.precipitation_sum[${day}]" <<< ${weather_data})
-precip_percentage=$(jq -r -c ".daily.precipitation_probability_max[${day}]" <<< ${weather_data})
-temp_low=$(jq -r -c ".daily.temperature_2m_min[${day}]" <<< ${weather_data})
-temp_high=$(jq -r -c ".daily.temperature_2m_max[${day}]" <<< ${weather_data})
-windspeed=$(jq -r -c ".daily.windspeed_10m_max[${day}]" <<< ${weather_data})
-winddirection=$(jq -r -c ".daily.winddirection_10m_dominant[${day}]" <<< ${weather_data})
+case "$action" in
+    config) 
+        do_config 
+        ;;
+    menu) 
+        printf "Show Forecast,%s -F\nNotification Info,%s -n\nSettings,%s -c\n" "$scriptname" "$scriptname" "$scriptname" | createjgmenu
+        ;;
+    forecast|notify|"")
+        if [ -z "$latitude" ]; then
+            die "Incomplete configuration. Run pmweather -c first."
+        fi
 
-weathercode=$(jq -r -c ".daily.weathercode[${day}]" <<< ${weather_data})
+        weather_data=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day,precipitation&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset&temperature_unit=${temp_unit}&timezone=auto&forecast_days=3")
 
-weather_icon_descriptor ${current_weathercode} "curr_weather"
-weather_icon_descriptor ${weathercode} "forecast_weather"
+        if [ -z "$weather_data" ]; then 
+            die "Error: Unable to connect to weather API."
+        fi
 
-if [[ ${show_notification} == "true" ]]; then
-	notif_subject="${location}"
-    notif_body="\nCurrent Weather:\n
-	${curr_weather["glyph"]} ${current_temp}${temp_degree} - ${curr_weather["text"]}\n
-    Humidity: ${relative_humidity}% - Cloud Cover: ${current_cloud_cover}%\n
-	Wind: ${current_wind_speed} ${windspeed_unit} `deg_to_direction ${current_wind_direction}`\n
-    Precipitation: ${precipitation} ${precipitation_unit}\n\n
-	Forecast:\n
-	${forecast_weather["glyph"]} ${forecast_weather["text"]} - $temp_low${temp_degree}/$temp_high${temp_degree}\n
-	Precipitation: $precip_sum ${precipitation_unit}\n
-	Prec. probability: $precip_percentage%\n
-	Sunrise: `date -d $sunrise +%H:%M`\n
-	Sunset:  `date -d $sunset +%H:%M`"
+        if [ "$action" = "forecast" ]; then
+            (
+                i=0
+                while [ $i -le 2 ]; do
+                    f_date=$(printf '%s' "$weather_data" | jq -r ".daily.time[$i]")
+                    f_max=$(printf '%s' "$weather_data" | jq -r ".daily.temperature_2m_max[$i]")
+                    f_min=$(printf '%s' "$weather_data" | jq -r ".daily.temperature_2m_min[$i]")
+                    f_code=$(printf '%s' "$weather_data" | jq -r ".daily.weather_code[$i]")
+                    f_prec=$(printf '%s' "$weather_data" | jq -r ".daily.precipitation_probability_max[$i]")
+                    
+                    f_info=$(get_info_by_code "$f_code" "1")
+                    f_icon_file=$(printf '%s' "$f_info" | cut -d'|' -f1)
+                    f_desc=$(printf '%s' "$f_info" | cut -d'|' -f3)
+                    
+                    sub_dir=""
+                    if [ "$icon_type" = "monochrome" ]; then
+                        sub_dir="dark/"
+                    fi
 
-	dunstify -i "${notification_icons_dir}/${curr_weather["icon"]}" "$notif_subject" "$(echo ${notif_body} | sed 's/^[ \t]*//')"
+                    printf '%s/%s%s\n' "$iconpath" "$sub_dir" "$f_icon_file"
+                    printf '%s\n' "$f_date"
+                    printf '%s\n' "$f_desc"
+                    printf '%s / %s°\n' "$f_min" "$f_max"
+                    printf '%s%%\n' "$f_prec"
+                    
+                    i=$((i + 1))
+                done
+            ) | yad --list \
+                --title="Weather Forecast: ${location}" \
+                --width=650 --height=400 --borders=15 \
+                --column="":IMG --column="Date" --column="Status" --column="Temp. Min/Max" --column="Rain Prob." \
+                --no-selection --button="Close:0"
+        else
+            curr_code=$(printf '%s' "$weather_data" | jq -r '.current.weather_code')
+            curr_is_day=$(printf '%s' "$weather_data" | jq -r '.current.is_day')
 
-	exit
-fi
+            info_str=$(get_info_by_code "$curr_code" "$curr_is_day")
+            icon_file=$(printf '%s' "$info_str" | cut -d'|' -f1)
+            glyph=$(printf '%s' "$info_str" | cut -d'|' -f2)
+            desc=$(printf '%s' "$info_str" | cut -d'|' -f3)
 
-if [[ ${show_text} == "true" ]]; then
-	echo ${curr_weather["text"]}
-elif [[ ${show_glyphs} == "true" ]]; then
-	echo ${curr_weather["glyph"]}
-else
-    echo "${icons_dir}/${curr_weather["icon"]}"
-fi
+            if [ "$action" = "notify" ]; then
+                curr_temp=$(printf '%s' "$weather_data" | jq -r '.current.temperature_2m')
+                curr_hum=$(printf '%s' "$weather_data" | jq -r '.current.relative_humidity_2m')
+                curr_wind=$(printf '%s' "$weather_data" | jq -r '.current.wind_speed_10m')
+                curr_prec=$(printf '%s' "$weather_data" | jq -r '.current.precipitation')
+                
+                if [ "$sys_lang" = "it" ]; then
+                    lbl_hum="Umidità"
+                    lbl_wind="Vento"
+                    lbl_prec="Pioggia"
+                else
+                    lbl_hum="Humidity"
+                    lbl_wind="Wind"
+                    lbl_prec="Rain"
+                fi
 
+                dunstify -i "${iconpath}/${icon_file}" "Weather: ${location}" \
+                    "Temp: ${curr_temp}° (${desc})\n${lbl_hum}: ${curr_hum}%\n${lbl_wind}: ${curr_wind} km/h\n${lbl_prec}: ${curr_prec} mm"
+            else
+                case "$output_format" in
+                    text)  
+                        printf '%s\n' "$desc" 
+                        ;;
+                    glyph) 
+                        printf '%s\n' "$glyph" 
+                        ;;
+                    icon)  
+                        sub=""
+                        if [ "$icon_type" = "monochrome" ]; then
+                            sub="dark/"
+                        fi
+                        printf '%s/%s%s\n' "$iconpath" "$sub" "$icon_file" 
+                        ;;
+                esac
+            fi
+        fi
+        ;;
+esac
