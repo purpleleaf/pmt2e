@@ -16,10 +16,14 @@ RC_XML="$HOME/.config/openbox/rc.xml"
 # ---------------------------------------------------------
 # Error handling & Utilities
 # ---------------------------------------------------------
-exists() { command -v "$1" >/dev/null 2>&1; }
+exists() { 
+    command -v "$1" >/dev/null 2>&1 
+}
 
 show_dialog() {
-    [ -f "$lock_file" ] && return
+    if [ -f "$lock_file" ]; then
+        return
+    fi
     touch "$lock_file"
     yad --title="$2" \
         --text="$1" \
@@ -44,11 +48,30 @@ die() {
     exit 1
 }
 
+show_help() {
+    printf "Usage: %s [-u|-d|-s idx|-G|-m|-h] [-t|-f|-i]\n\n" "$scriptname"
+    printf "PMT2e Workspace Agent - Switch and Manage Openbox Desktops\n\n"
+    printf "ACTIONS (Choose exactly one):\n"
+    printf "  -u        Switch to the next workspace (up)\n"
+    printf "  -d        Switch to the previous workspace (down)\n"
+    printf "  -s [idx]  Switch to specific workspace index (0-based)\n"
+    printf "  -G        Open GUI to set total number of desktops\n"
+    printf "  -m        Show interactive jgmenu\n"
+    printf "  -h        Show this help message and exit\n\n"
+    printf "OUTPUT FORMATS (Optional):\n"
+    printf "  -t        Print text output (e.g., 1/4) [DEFAULT]\n"
+    printf "  -f        Print Nerd Font glyph\n"
+    printf "  -i        Print path to desktop SVG icon\n"
+    exit 0
+}
+
 # ---------------------------------------------------------
 # Workspace Logic
 # ---------------------------------------------------------
 get_ws_info() {
-    exists wmctrl || return 1
+    if ! exists wmctrl; then
+        return 1
+    fi
     ws_data=$(wmctrl -d)
     total_ws=$(printf '%s\n' "$ws_data" | wc -l)
     current_ws=$(printf '%s\n' "$ws_data" | grep '*' | awk '{print $1}')
@@ -56,20 +79,29 @@ get_ws_info() {
 
 set_ws() {
     target="$1"
-    [ "$target" -lt 0 ] || [ "$target" -ge "$total_ws" ] && return
+    if [ "$target" -lt 0 ] || [ "$target" -ge "$total_ws" ]; then
+        return
+    fi
     wmctrl -s "$target"
 }
 
 set_total_desktops() {
     new_total="$1"
-    [ -z "$new_total" ] && return
+    if [ -z "$new_total" ]; then
+        return
+    fi
+    
     # Bounds check
-    if [ "$new_total" -lt 1 ] || [ "$new_total" -gt 10 ]; then return; fi
+    if [ "$new_total" -lt 1 ] || [ "$new_total" -gt 10 ]; then 
+        return
+    fi
 
     if [ -f "$RC_XML" ]; then
         # Precise sed targeting for Openbox rc.xml
         sed -i "/<desktops>/,/<number>/ s|<number>.*</number>|<number>$new_total</number>|" "$RC_XML"
-        exists openbox && openbox --reconfigure
+        if exists openbox; then
+            openbox --reconfigure
+        fi
     else
         # Fallback for live session if no config found
         wmctrl -n "$new_total"
@@ -77,53 +109,105 @@ set_total_desktops() {
 }
 
 do_total_gui() {
-    exists yad || die -y "yad is required for this action."
+    if ! exists yad; then
+        die -y "yad is required for this action."
+    fi
+    
     get_ws_info
     
     # Using single quotes for the value field to avoid shell collision
-    new_val=$(yad --title='Desktop Settings' --window-icon='workspace-number' \
+    new_val=$(yad --title='Desktop Settings' \
+        --window-icon='workspace-number' \
         --text='Set total number of desktops (Max 10):' \
-        --form --field='Number of Desktops:NUM' "$total_ws"'!1..10!1!0' \
-        --button='Apply:0' --button='Cancel:1' --borders=15)
+        --form \
+        --columns=2 \
+        --field='Number of Desktops:NUM' "$total_ws"'!1..10!1!0' \
+        --field='!gtk-help!Info':BTN "yad --info --title='Info' --borders=15 --text='This will modify the <desktops> section in your Openbox rc.xml and reconfigure the window manager.'" \
+        --button='Apply:0' --button='Cancel:1' \
+        --borders=15)
     
-    if [ $? -eq 0 ]; then
+    if [ $? -eq 0 ] && [ -n "$new_val" ]; then
         clean_val=$(printf '%s\n' "$new_val" | cut -d'|' -f1 | cut -d'.' -f1)
         set_total_desktops "$clean_val"
     fi
 }
 
 # ---------------------------------------------------------
-# Execution
+# Execution & Argument Parsing
 # ---------------------------------------------------------
-exists wmctrl || exit 0
-get_ws_info
+if ! exists wmctrl; then
+    exit 0
+fi
 
 action=""
-output_format=""
+output_format="text"
 input_val=""
 
-[ $# -eq 0 ] && output_format="text"
+err_act="Only one action can be chosen: -u -d -s -G -m"
+err_out="Only one output can be chosen: -t -f -i"
 
-while getopts ":huds:iftmG" opt; do
+while getopts ":huds:Gimft" opt; do
     case ${opt} in
-        h) printf "Usage: %s [-u|-d|-s idx|-G] [-t|-f|-i|-m]\n" "$scriptname"; exit 0 ;;
-        u) action="up" ;;
-        d) action="down" ;;
-        s) action="set"; input_val="$OPTARG" ;;
-        m) action="menu" ;;
-        G) action="total_gui" ;;
-        i) output_format="icon" ;;
-        f) output_format="glyph" ;;
-        t) output_format="text" ;;
+        h) 
+            show_help 
+            ;;
+        u) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="up" 
+            ;;
+        d) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="down" 
+            ;;
+        s) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="set"
+            input_val="$OPTARG" 
+            ;;
+        G) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="total_gui" 
+            ;;
+        m) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="menu" 
+            ;;
+        t) 
+            output_format="text" 
+            ;;
+        f) 
+            if [ "$output_format" != "text" ]; then die "$err_out"; fi
+            output_format="glyph" 
+            ;;
+        i) 
+            if [ "$output_format" != "text" ]; then die "$err_out"; fi
+            output_format="icon" 
+            ;;
+        \?|*) 
+            die "Invalid option. Use -h for help." 
+            ;;
     esac
 done
 
+# Initialize variables required for actions
+get_ws_info
+
+# --- Handle Actions ---
 if [ -n "$action" ]; then
     case "$action" in
-        up)   set_ws "$((current_ws + 1))" ;;
-        down) set_ws "$((current_ws - 1))" ;;
-        set)  set_ws "$input_val" ;;
-        total_gui) do_total_gui; exit 0 ;;
+        up)        
+            set_ws "$((current_ws + 1))" 
+            ;;
+        down)      
+            set_ws "$((current_ws - 1))" 
+            ;;
+        set)       
+            set_ws "$input_val" 
+            ;;
+        total_gui) 
+            do_total_gui
+            exit 0 
+            ;;
         menu) 
             menu_list=$(
                 printf "Manage Desktops (GUI),%s -G\n" "$scriptname"
@@ -131,7 +215,11 @@ if [ -n "$action" ]; then
                 i=0
                 while [ "$i" -lt "$total_ws" ]; do
                     display_idx=$((i + 1))
-                    [ "$i" -eq "$current_ws" ] && prefix="●" || prefix="○"
+                    if [ "$i" -eq "$current_ws" ]; then
+                        prefix="●"
+                    else
+                        prefix="○"
+                    fi
                     printf "%s Workspace %s,%s -s %s\n" "$prefix" "$display_idx" "$scriptname" "$i"
                     i=$((i + 1))
                 done
@@ -140,15 +228,22 @@ if [ -n "$action" ]; then
             exit 0
             ;;
     esac
+    
+    # Update state after action to ensure correct output if output is also requested
     get_ws_info
-    [ -z "$output_format" ] && exit 0
 fi
 
-if [ -n "$output_format" ]; then
-    display_num=$((current_ws + 1))
-    case "$output_format" in
-        text)  printf '%s/%s\n' "$display_num" "$total_ws" ;;
-        glyph) printf '󰇄 %s\n' "$display_num" ;;
-        icon)  printf '%s/desktop.svg\n' "$iconpath" ;;
-    esac
-fi
+# --- Handle Output ---
+display_num=$((current_ws + 1))
+
+case "$output_format" in
+    text)  
+        printf '%s/%s\n' "$display_num" "$total_ws" 
+        ;;
+    glyph) 
+        printf '󰇄 %s\n' "$display_num" 
+        ;;
+    icon)  
+        printf '%s/desktop.svg\n' "$iconpath" 
+        ;;
+esac
