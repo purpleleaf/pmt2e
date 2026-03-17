@@ -5,6 +5,7 @@
 # Author       : Max Franco <purpleleaf at ganoia.eu>
 # License      : GPL-3.0
 # Dependencies : light OR brightnessctl OR xbacklight, jgmenu, dunstify, yad
+# Optional     : Nerd font of your choice for font glyph output
 # ==============================================================================
 
 iconpath="/usr/share/pmt2e/icons"
