@@ -38,8 +38,8 @@ done
 sys_lang=$(printf '%s' "${LANG:-en}" | cut -d_ -f1 | cut -d. -f1)
 
 # Default panel signals (Must be distinct from pmupdater)
-waybar_signal="9"
-sfwbar_signal="5"
+waybar_signal="10"
+sfwbar_signal="6"
 refresh_cmd=""
 
 show_help() {
