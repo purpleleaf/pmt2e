@@ -11,31 +11,65 @@
 
 iconpath="/usr/share/pmt2e/icons"
 scriptname=$(basename "$0")
+lock_file="/tmp/${scriptname}.lock"
 
 # ---------------------------------------------------------
 # Error handling & Utilities
 # ---------------------------------------------------------
-exists() { command -v "$1" >/dev/null 2>&1; }
+exists() { 
+    command -v "$1" >/dev/null 2>&1 
+}
 
 show_dialog() {
+    # Flood protection
+    if [ -f "$lock_file" ]; then
+        return
+    fi
+    touch "$lock_file"
+
     yad --title="$2" \
         --text="$1" \
         --image="$3" \
         --window-icon="$3" \
         --borders=15 \
         --button="Close:0"
+    
+    rm -f "$lock_file"
 }
 
 die() {
     if [ "$1" = "-g" ]; then
         shift
-        if exists yad; then show_dialog "$*" "Error" "dialog-error"
-        else printf '%s\n' "$*" 1>&2
+        if exists yad; then 
+            show_dialog "$*" "Error" "dialog-error"
+        else 
+            printf '%s\n' "$*" 1>&2
         fi
     else
         printf '%s\n' "$*" 1>&2
     fi
     exit 1
+}
+
+show_help() {
+    printf "Usage: %s [OPTION]\n\n" "$scriptname"
+    printf "PMT2e Volume Executor - A lightweight ALSA volume monitor for panels.\n"
+    printf "Defaults to '-t' (text output) if no options are provided.\n\n"
+    printf "ACTIONS (Choose exactly one):\n"
+    printf "  -u        Increase volume by the configured step\n"
+    printf "  -d        Decrease volume by the configured step\n"
+    printf "  -x        Toggle mute state\n"
+    printf "  -s NUM    Set volume to specific number (0-100)\n"
+    printf "  -M        Open the configured audio mixer\n"
+    printf "  -S        Open the default sound card selector\n"
+    printf "  -c        Open the configuration GUI\n"
+    printf "  -m        Show interactive jgmenu\n"
+    printf "  -h        Show this help message and exit\n\n"
+    printf "OUTPUT FORMATS (Optional):\n"
+    printf "  -t        Print volume text (e.g., 50%% or Muted) [DEFAULT]\n"
+    printf "  -f        Print the volume Nerd Font glyph\n"
+    printf "  -i        Print the path to the current volume icon (SVG)\n"
+    exit 0
 }
 
 # --- Configuration & Terminal Detection ---
@@ -46,7 +80,10 @@ terminal_list="xterm $TERMINAL x-terminal-emulator alacritty kitty foot ghostty 
 
 terminal=""
 for term in $terminal_list; do
-    if exists "$term"; then terminal="$term"; break; fi
+    if exists "$term"; then 
+        terminal="$term"
+        break
+    fi
 done
 
 # Default Configuration
@@ -64,7 +101,7 @@ if [ -f "$config_file" ] && [ -r "$config_file" ]; then
         case "$key" in
             mixer_channel) mixer_channel="$val" ;;
             vol_step)      vol_step="$val" ;;
-            mixer_app)     mixer_app="$val" ;;
+            mixer_app)      mixer_app="$val" ;;
             mixer_type)    mixer_type="$val" ;;
             terminal)      terminal="$val" ;;
             term_emu)      terminal="$val" ;; # Legacy support
@@ -73,33 +110,6 @@ if [ -f "$config_file" ] && [ -r "$config_file" ]; then
         esac
     done < "$config_file"
 fi
-
-# --- Global Variables ---
-action="text" # Default action if no arguments are passed
-input_vol=""
-
-show_help() {
-    cat << EOF
-Usage: $scriptname [OPTION]
-
-PMT2e Volume Executor - A lightweight ALSA volume monitor for panels.
-Defaults to '-t' (text output) if no options are provided.
-
-Options:
-  -t      Print volume text (e.g., 50% or Muted)
-  -i      Print the path to the current volume icon (SVG)
-  -f      Print the volume Nerd Font glyph
-  -u      Increase volume by the configured step
-  -d      Decrease volume by the configured step
-  -x      Toggle mute state
-  -s NUM  Set volume to specific number (0-100)
-  -m      Generate jgmenu formatted output for context menus
-  -M      Open the configured audio mixer
-  -S      Open the default sound card selector
-  -c      Open the configuration GUI
-  -h      Show this help message and exit
-EOF
-}
 
 # ---------------------------------------------------------
 # ALSA Parsing (BusyBox/BSD Compatible)
@@ -121,7 +131,9 @@ get_channel() {
             done
         )
     fi
-    [ -n "$mixer_channel" ] || die -g "No volume control available on this device."
+    if [ -z "$mixer_channel" ]; then
+        die -g "No volume control available on this device."
+    fi
 }
 
 get_volume() {
@@ -149,8 +161,10 @@ get_volume() {
         *) vol="$vol_out" ;;
     esac
 
-    if amixer get "$mixer_channel" | grep '%' | grep -q off; then state="off"
-    else state="on"
+    if amixer get "$mixer_channel" | grep '%' | grep -q off; then 
+        state="off"
+    else 
+        state="on"
     fi
 }
 
@@ -162,9 +176,12 @@ send_notification() {
         if [ "$state" = "off" ]; then
             dunstify -t 1000 -h string:x-dunst-stack-tag:volume -i audio-volume-muted-symbolic -u normal "Volume Muted"
         else
-            if [ "$vol" -ge 70 ]; then icon="audio-volume-high-symbolic"
-            elif [ "$vol" -ge 30 ]; then icon="audio-volume-medium-symbolic"
-            else icon="audio-volume-low-symbolic"
+            if [ "$vol" -ge 70 ]; then 
+                icon="audio-volume-high-symbolic"
+            elif [ "$vol" -ge 30 ]; then 
+                icon="audio-volume-medium-symbolic"
+            else 
+                icon="audio-volume-low-symbolic"
             fi
             dunstify -t 1000 -h string:x-dunst-stack-tag:volume -i "$icon" -h int:value:"$vol" -u normal "Volume: ${vol}%"
         fi
@@ -172,8 +189,12 @@ send_notification() {
 }
 
 broadcast_refresh() {
-    if pgrep -x "waybar" >/dev/null; then pkill -RTMIN+"$waybar_signal" waybar; fi
-    if pgrep -x "sfwbar" >/dev/null; then pkill -RTMIN+"$sfwbar_signal" sfwbar; fi
+    if pgrep -x "waybar" >/dev/null; then 
+        pkill -RTMIN+"$waybar_signal" waybar
+    fi
+    if pgrep -x "sfwbar" >/dev/null; then 
+        pkill -RTMIN+"$sfwbar_signal" sfwbar
+    fi
 }
 
 # ---------------------------------------------------------
@@ -185,15 +206,22 @@ do_config() {
     while true; do
         # Build ALSA dropdown
         combo_list="$mixer_channel"
-        [ "$mixer_channel" != "Auto" ] && combo_list="${combo_list}!Auto"
+        if [ "$mixer_channel" != "Auto" ]; then
+            combo_list="${combo_list}!Auto"
+        fi
 
         extra_controls=$(amixer scontrols 2>/dev/null | sed -n "s/.*'\(.*\)'.*/\1/p" | while read -r c; do
-            [ "$c" != "$mixer_channel" ] && printf "!%s" "$c"
+            if [ "$c" != "$mixer_channel" ]; then
+                printf "!%s" "$c"
+            fi
         done)
         combo_list="${combo_list}${extra_controls}"
 
-        if [ "$mixer_type" = "GUI" ]; then type_combo="GUI!CLI"
-        else type_combo="CLI!GUI"; fi
+        if [ "$mixer_type" = "GUI" ]; then 
+            type_combo="GUI!CLI"
+        else 
+            type_combo="CLI!GUI"
+        fi
 
         new_configs=$(yad --title="PM Volume configuration" \
             --window-icon="multimedia-volume-control" \
@@ -205,16 +233,20 @@ do_config() {
             --field="Mixer Type:":CB "$type_combo" \
             --field="Terminal Emulator:" "$terminal" \
             --field='!gtk-help!ALSA Channel':BTN "yad --info --title='Info' --borders=15 --text='Select the ALSA control. Auto will attempt to find the default volume slider.'" \
-            --field='!gtk-help!Volume Step Size':BTN "yad --info --title='Info' --borders=15 --text='How much the volume changes when using the up/down commands.'" \
+            --field='!gtk-help!Step Size':BTN "yad --info --title='Info' --borders=15 --text='How much the volume changes when using the up/down commands.'" \
             --field='!gtk-help!Mixer App':BTN "yad --info --title='Info' --borders=15 --text='Type the mixer command to launch (e.g., alsamixer, qasmixer).'" \
             --field='!gtk-help!Mixer Type':BTN "yad --info --title='Info' --borders=15 --text='Select CLI for terminal apps like alsamixer, or GUI for visual apps like pavucontrol.'" \
-            --field='!gtk-help!Terminal Emulator':BTN "yad --info --title='Info' --borders=15 --text='Type your terminal emulator command (Required for CLI Mixers).'")
+            --field='!gtk-help!Terminal':BTN "yad --info --title='Info' --borders=15 --text='Type your terminal emulator command (Required for CLI Mixers).'")
 
-        [ -z "$new_configs" ] && break
+        if [ -z "$new_configs" ]; then
+            break
+        fi
 
-        IFS='|' read -r ch_name v_step m_app m_type t_emu _ <<EOF
-$new_configs
-EOF
+        ch_name=$(printf '%s\n' "$new_configs" | cut -d'|' -f1)
+        v_step=$(printf '%s\n' "$new_configs" | cut -d'|' -f2)
+        m_app=$(printf '%s\n' "$new_configs" | cut -d'|' -f3)
+        m_type=$(printf '%s\n' "$new_configs" | cut -d'|' -f4)
+        t_emu=$(printf '%s\n' "$new_configs" | cut -d'|' -f5)
 
         if [ -n "$m_app" ] && ! exists "$m_app"; then
             yad --title="Invalid Mixer" --text="The application '$m_app' was not found in your system PATH." --image="dialog-error" --borders=15 --button="Try Again:0"
@@ -233,7 +265,9 @@ EOF
             t_emu=""
         fi
 
-        [ ! -f "$config_file" ] && touch "$config_file"
+        if [ ! -f "$config_file" ]; then
+            touch "$config_file"
+        fi
 
         sed -i '/^mixer_channel=/d; /^vol_step=/d; /^mixer_app=/d; /^mixer_type=/d; /^terminal=/d; /^term_emu=/d' "$config_file"
 
@@ -245,8 +279,8 @@ EOF
           echo "terminal='$t_emu'"
         } >> "$config_file"
 
-        grep -q "^waybar_signal=" "$config_file" || echo "waybar_signal='$waybar_signal'" >> "$config_file"
-        grep -q "^sfwbar_signal=" "$config_file" || echo "sfwbar_signal='$sfwbar_signal'" >> "$config_file"
+        if ! grep -q "^waybar_signal=" "$config_file"; then echo "waybar_signal='$waybar_signal'" >> "$config_file"; fi
+        if ! grep -q "^sfwbar_signal=" "$config_file"; then echo "sfwbar_signal='$sfwbar_signal'" >> "$config_file"; fi
 
         break
     done
@@ -297,7 +331,9 @@ do_select_card() {
         }
     ' /proc/asound/cards)
 
-    if [ -z "$cards" ]; then die -g "No ALSA sound cards detected."; fi
+    if [ -z "$cards" ]; then 
+        die -g "No ALSA sound cards detected."
+    fi
 
     combo_string=$(printf '%s\n' "$cards" | tr '\n' '^' | sed 's/\^$//')
 
@@ -308,16 +344,20 @@ do_select_card() {
         --text="Select the default ALSA audio device for your system:\n" \
         --borders=15 \
         --form \
+        --columns=2 \
         --separator="|" \
         --item-separator="^" \
         --field="Default Card:CB" "$combo_string" \
-        --button="Save:0" --button="Cancel:1")
+        --field='!gtk-help!Info':BTN "yad --info --title='Info' --borders=15 --text='This will update your ~/.asoundrc file to set the default ALSA card for PCM and CTL.'")
 
-    [ -z "$selection" ] && exit 0
+    if [ -z "$selection" ]; then 
+        exit 0
+    fi
 
     chosen_id=$(printf '%s\n' "$selection" | sed 's/.*\[\([^]]*\)\].*/\1/')
-    [ -z "$chosen_id" ] && exit 0
-    [ "$chosen_id" = "$current_default" ] && exit 0
+    if [ -z "$chosen_id" ] || [ "$chosen_id" = "$current_default" ]; then
+        exit 0
+    fi
 
     cat <<EOF > "$HOME/.asoundrc"
 # Auto-generated by PMT2e Soundcard Selector
@@ -335,7 +375,7 @@ do_open_mixer() {
         if exists "$mixer_app"; then
             $mixer_app &
         else
-            $0 -c
+            "$0" -c
         fi
         exit 0
     fi
@@ -346,11 +386,13 @@ do_open_mixer() {
             --window-icon="dialog-warning" \
             --borders=15 \
             --button="Settings:0" --button="Cancel:1"
-        [ $? -eq 0 ] && $0 -c
+        if [ $? -eq 0 ]; then
+            "$0" -c
+        fi
         exit 0
     fi
 
-    $terminal -e $mixer_app &
+    $terminal -e "$mixer_app" &
 }
 
 do_menu() {
@@ -361,69 +403,124 @@ do_menu() {
 # ---------------------------------------------------------
 # Argument Parsing & Execution
 # ---------------------------------------------------------
-if [ $# -gt 0 ]; then
-    action=""
-    while getopts ":StfhiudxmMcs:" opt; do
-        case ${opt} in
-            S) action="select_card" ;;
-            t) action="text" ;;
-            f) action="glyph" ;;
-            i) action="icon" ;;
-            u) action="vol_up" ;;
-            d) action="vol_down" ;;
-            x) action="mute_toggle" ;;
-            m) action="menu" ;;
-            M) action="open_mixer" ;;
-            c) action="config" ;;
-            s)
-                action="set_vol"
-                case "$OPTARG" in
-                    ''|*[!0-9]*) die "Error: -s argument must be a number 0-100" ;;
-                    *) [ "$OPTARG" -ge 0 ] && [ "$OPTARG" -le 100 ] && input_vol="$OPTARG" || die "Error: -s must be 0-100" ;;
-                esac
-                ;;
-            h) show_help; exit 0 ;;
-            :)
-                printf "%s: option -%s requires an argument (0-100).\n" "$scriptname" "$OPTARG" >&2
-                exit 1
-                ;;
-            \?|*)
-                printf "%s: unrecognised option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
-                exit 1
-                ;;
-        esac
-    done
+action=""
+output="text"
+input_vol=""
+
+err_act="Only one action can be chosen: -u -d -x -s -M -S -c -m"
+err_out="Only one output can be chosen: -t -f -i"
+
+while getopts ":StfhiudxmMcs:" opt; do
+    case ${opt} in
+        h) 
+            show_help 
+            ;;
+        S) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="select_card" 
+            ;;
+        t) 
+            output="text" 
+            ;;
+        f) 
+            if [ "$output" != "text" ]; then die "$err_out"; fi
+            output="glyph" 
+            ;;
+        i) 
+            if [ "$output" != "text" ]; then die "$err_out"; fi
+            output="icon" 
+            ;;
+        u) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="vol_up" 
+            ;;
+        d) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="vol_down" 
+            ;;
+        x) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="mute_toggle" 
+            ;;
+        m) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="menu" 
+            ;;
+        M) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="open_mixer" 
+            ;;
+        c) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="config" 
+            ;;
+        s)
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="set_vol"
+            case "$OPTARG" in
+                ''|*[!0-9]*) die "Error: -s argument must be a number 0-100" ;;
+                *) if [ "$OPTARG" -ge 0 ] && [ "$OPTARG" -le 100 ]; then 
+                       input_vol="$OPTARG" 
+                   else 
+                       die "Error: -s must be 0-100" 
+                   fi ;;
+            esac
+            ;;
+        \?|*)
+            die "Invalid option. Use -h for help."
+            ;;
+    esac
+done
+
+if [ -z "$action" ] && [ "$output" = "text" ] && [ $OPTIND -eq 1 ]; then
+    # Default to polling text if no args
+    action="poll"
+fi
+
+if [ -z "$action" ] && [ -n "$output" ]; then
+    action="poll"
 fi
 
 if [ -z "$action" ]; then
-    printf "%s: missing valid option. Use %s -h for help.\n" "$scriptname" "$scriptname" >&2
-    exit 1
+    die "Missing valid option. Use -h for help."
 fi
 
 exists amixer || die -g "amixer not found; ALSA tools required."
 
-# Bypass ALSA volume querying if we are just opening a GUI
+# Bypass ALSA query if just opening a GUI
 case $action in
     config|select_card) ;;
     *) get_channel; get_volume ;;
 esac
 
 case "$action" in
-    config)      do_config ;;
-    select_card) do_select_card ;;
-    open_mixer)  do_open_mixer ;;
-    menu)        do_menu ;;
+    config)      
+        do_config 
+        ;;
+    select_card) 
+        do_select_card 
+        ;;
+    open_mixer)  
+        do_open_mixer 
+        ;;
+    menu)        
+        do_menu 
+        ;;
     set_vol)
         amixer sset "$mixer_channel" "${input_vol}%" >/dev/null 2>&1
         get_volume; send_notification; broadcast_refresh
         ;;
     vol_up)
-        if [ "$state" = "off" ]; then amixer sset "$mixer_channel" toggle >/dev/null 2>&1; fi
+        if [ "$state" = "off" ]; then 
+            amixer sset "$mixer_channel" toggle >/dev/null 2>&1
+        fi
         amixer sset "$mixer_channel" "${vol_step}%+" >/dev/null 2>&1
         get_volume; send_notification; broadcast_refresh
         ;;
     vol_down)
-        if [ "$state" = "off" ]; then amixer sset "$mixer_channel" toggle >/dev/null 2>&1; fi
+        if [ "$state" = "off" ]; then 
+            amixer sset "$mixer_channel" toggle >/dev/null 2>&1
+        fi
         amixer sset "$mixer_channel" "${vol_step}%-" >/dev/null 2>&1
         get_volume; send_notification; broadcast_refresh
         ;;
@@ -431,23 +528,37 @@ case "$action" in
         amixer sset "$mixer_channel" toggle >/dev/null 2>&1
         get_volume; send_notification; broadcast_refresh
         ;;
-    text)
-        if [ "$state" = "off" ]; then echo "Muted"
-        else echo "${vol}%"
-        fi
-        ;;
-    glyph)
-        if [ "$state" = "off" ]; then echo "󰝟"
-        elif [ "$vol" -ge 90 ]; then echo "󰕾"
-        elif [ "$vol" -ge 33 ]; then echo "󰖀"
-        else echo "󰕿"
-        fi
-        ;;
-    icon)
-        if [ "$state" = "off" ] || [ "$vol" -eq 0 ]; then echo "audio-volume-muted-symbolic"
-        elif [ "$vol" -ge 70 ]; then echo "audio-volume-high-symbolic"
-        elif [ "$vol" -ge 30 ]; then echo "audio-volume-medium-symbolic"
-        else echo "audio-volume-low-symbolic"
-        fi
+    poll)
+        case "$output" in
+            text)
+                if [ "$state" = "off" ]; then 
+                    echo "Muted"
+                else 
+                    echo "${vol}%"
+                fi
+                ;;
+            glyph)
+                if [ "$state" = "off" ]; then 
+                    echo "󰝟"
+                elif [ "$vol" -ge 90 ]; then 
+                    echo "󰕾"
+                elif [ "$vol" -ge 33 ]; then 
+                    echo "󰖀"
+                else 
+                    echo "󰕿"
+                fi
+                ;;
+            icon)
+                if [ "$state" = "off" ] || [ "$vol" -eq 0 ]; then 
+                    echo "audio-volume-muted-symbolic"
+                elif [ "$vol" -ge 70 ]; then 
+                    echo "audio-volume-high-symbolic"
+                elif [ "$vol" -ge 30 ]; then 
+                    echo "audio-volume-medium-symbolic"
+                else 
+                    echo "audio-volume-low-symbolic"
+                fi
+                ;;
+        esac
         ;;
 esac
