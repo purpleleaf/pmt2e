@@ -6,6 +6,7 @@
 # Credits      : Piotr Miller (nwg-piotr) - Original creator of the t2ec project
 # License      : GPL-3.0
 # Dependencies : alsa-utils (amixer), yad, jgmenu, dunstify (optional)
+# Optional     : Nerd font of your choice for font glyph output
 # ==============================================================================
 
 iconpath="/usr/share/pmt2e/icons"
