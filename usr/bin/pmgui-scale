@@ -1,0 +1,67 @@
+#!/bin/sh
+# ==============================================================================
+# Script Name  : pmgui-scale
+# Description  : PMT2e Universal GUI Slider - Fixed Smooth Stepping
+# Author       : Max Franco <purpleleaf at ganoia.eu>
+# License      : GPL-3.0
+# ==============================================================================
+
+scriptname=$(basename "$0")
+lock_file="/tmp/${scriptname}.lock"
+
+exists() { command -v "$1" >/dev/null 2>&1; }
+die() { printf '%s\n' "$*" 1>&2; exit 1; }
+
+mode=""
+while getopts ":bvh" opt; do
+    case ${opt} in
+        b)
+            mode="brightness"
+            get_cmd="pmbrightness -t | tr -dc '0-9'"
+            set_cmd="pmbrightness -s"
+            icon="display-brightness-symbolic"
+            ;;
+        v)
+            mode="volume"
+            get_cmd="pmvolume -t | tr -dc '0-9'"
+            set_cmd="pmvolume -s"
+            icon="audio-volume-high-symbolic"
+            ;;
+        \?|*) die "Usage: $0 -b | -v" ;;
+    esac
+done
+
+[ -z "$mode" ] && die "Mode required."
+[ -f "$lock_file" ] && exit 0
+touch "$lock_file"
+
+current_val=$(eval "$get_cmd")
+[ -z "$current_val" ] && current_val=50
+
+# Optimized YAD Scale for smoothness:
+# --step="1"  : Allows fine-grained movement with arrow keys/scroll
+# --page="5"  : Movement when clicking the track
+# --print-partial : Sends value to pipe AS you drag
+yad --scale \
+    --vertical \
+    --value="$current_val" \
+    --range="0..100" \
+    --step="1" \
+    --page="5" \
+    --print-partial \
+    --width=60 \
+    --height=300 \
+    --undecorated \
+    --on-top \
+    --mouse \
+    --close-on-unfocus \
+    --hide-value \
+    --no-buttons \
+    --borders=10 | while read -r val; do
+        # We only execute the set command if we get a valid number
+        case "$val" in
+            [0-9]*) eval "$set_cmd $val" ;;
+        esac
+    done
+
+rm -f "$lock_file"
