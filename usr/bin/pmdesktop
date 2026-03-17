@@ -4,7 +4,8 @@
 # Description  : PMT2e Workspace Agent - Switch and Manage Openbox Desktops
 # Author       : Max Franco <purpleleaf at ganoia.eu>
 # License      : GPL-3.0
-# Dependencies : wmctrl, yad, jgmenu, openbox
+# Dependencies : wmctrl, yad, jgmenu
+# Optional     : Nerd font of your choice for font glyph output
 # ==============================================================================
 
 iconpath="/usr/share/pmt2e/icons"
