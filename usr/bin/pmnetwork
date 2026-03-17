@@ -10,20 +10,29 @@
 
 iconpath="/usr/share/pmt2e/icons"
 scriptname=$(basename "$0")
+lock_file="/tmp/${scriptname}.lock"
 
 # ---------------------------------------------------------
 # Error handling & Utilities
 # ---------------------------------------------------------
-exists() { command -v "$1" >/dev/null 2>&1; }
+exists() { 
+    command -v "$1" >/dev/null 2>&1 
+}
 
 show_error() {
     msg="$1"
     if exists yad; then
+        if [ -f "$lock_file" ]; then
+            return
+        fi
+        touch "$lock_file"
         yad --form --field="$msg:LBL" \
             --title="Network Error" \
             --window-icon="network-error" \
             --borders=15 \
-            --width="500" --center
+            --width="500" --center \
+            --button="Close:0"
+        rm -f "$lock_file"
     else
         printf '%s\n' "$msg" 1>&2
     fi
@@ -35,27 +44,22 @@ die() {
 }
 
 show_help() {
-    cat << EOF
-Usage: $scriptname [Action] [Output]
-
-PMT2e Network Agent - A lightweight network monitor for panels.
-
-ACTIONS (Choose one):
-  -n    Trigger a rich desktop notification with IP, DNS, and WiFi details
-  -m    Show an interactive jgmenu for management and diagnostics
-  -M    Launch the configured Network Manager (GUI or CLI)
-  -P    Run a quick Ping Test in a terminal
-  -c    Open the configuration GUI to set tools and terminals
-  -h    Show this help message and exit
-
-OUTPUT FORMATS (For status bars):
-  -t    Print short text (e.g., 'Net: WiFi' or 'Net: Wired')
-  -f    Print the network Nerd Font glyph (signal-aware)
-  -i    Print the path to the current network SVG icon
-
-Configuration:
-  Settings are saved to: ${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e/pmnetwork.conf
-EOF
+    printf "Usage: %s [Action] [Output]\n\n" "$scriptname"
+    printf "PMT2e Network Agent - A lightweight network monitor for panels.\n\n"
+    printf "ACTIONS (Choose exactly one):\n"
+    printf "  -n    Trigger a rich desktop notification with IP, DNS, and WiFi details\n"
+    printf "  -m    Show an interactive jgmenu for management and diagnostics\n"
+    printf "  -M    Launch the configured Network Manager (GUI or CLI)\n"
+    printf "  -P    Run a quick Ping Test in a terminal\n"
+    printf "  -c    Open the configuration GUI to set tools and terminals\n"
+    printf "  -h    Show this help message and exit\n\n"
+    printf "OUTPUT FORMATS (For status bars):\n"
+    printf "  -t    Print short text (e.g., 'Net: WiFi' or 'Net: Wired') [DEFAULT]\n"
+    printf "  -f    Print the network Nerd Font glyph (signal-aware)\n"
+    printf "  -i    Print the path to the current network SVG icon\n\n"
+    printf "Configuration:\n"
+    printf "  Settings are saved to: %s/pmnetwork.conf\n" "${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
+    exit 0
 }
 
 # ---------------------------------------------------------
@@ -69,7 +73,10 @@ terminal_list="xterm $TERMINAL x-terminal-emulator alacritty kitty foot ghostty 
 # Terminal detection
 terminal=""
 for term in $terminal_list; do
-    if exists "$term"; then terminal="$term"; break; fi
+    if exists "$term"; then 
+        terminal="$term"
+        break
+    fi
 done
 
 # Default Configuration
@@ -95,8 +102,6 @@ is_wifi=0
 is_wired=0
 quality=""
 signal=""
-action=""
-output_format=""
 
 # ---------------------------------------------------------
 # OS detection & RSSI Conversion
@@ -115,12 +120,16 @@ calculate_quality() {
         quality=""
         return
     fi
+    
     # Ensure rssi is a clean integer
     rssi=$(printf '%s\n' "$rssi" | tr -d '[:alpha:]%, ')
     
-    if [ "$rssi" -le -100 ]; then quality=0
-    elif [ "$rssi" -ge -50 ]; then quality=100
-    else quality=$(( 2 * (rssi + 100) ))
+    if [ "$rssi" -le -100 ]; then 
+        quality=0
+    elif [ "$rssi" -ge -50 ]; then 
+        quality=100
+    else 
+        quality=$(( 2 * (rssi + 100) ))
     fi
 }
 
@@ -139,11 +148,15 @@ linux_detect() {
         shift
     done
     
-    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then net_is_up=1; fi
+    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then 
+        net_is_up=1
+    fi
     
     if [ "$net_is_up" = 1 ]; then
-        if iw dev "$default_iface" info >/dev/null 2>&1; then is_wifi=1
-        else is_wired=1
+        if iw dev "$default_iface" info >/dev/null 2>&1; then 
+            is_wifi=1
+        else 
+            is_wired=1
         fi
     fi
     
@@ -151,7 +164,9 @@ linux_detect() {
         wifi_link=$(iw dev "$default_iface" link 2>/dev/null)
         while IFS= read -r line; do
             case "$line" in
-                *SSID:*)  wifi_name=${line#*SSID: } ;;
+                *SSID:*)  
+                    wifi_name=${line#*SSID: } 
+                    ;;
                 *signal:*) 
                     set -- $line
                     signal=$(printf '%s\n' "$2" | tr -d '%, ')
@@ -165,7 +180,7 @@ EOF
 }
 
 bsd_detect() {
-    route=$(route -n get default 2>/dev/null) || route=
+    route=$(route -n get default 2>/dev/null) || route=""
     if [ -n "$route" ]; then
         while IFS= read -r line; do
             set -- $line
@@ -182,18 +197,26 @@ $route
 EOF
     fi
 
-    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then net_is_up=1; fi
+    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then 
+        net_is_up=1
+    fi
 
     case "$default_iface" in
-        wlan*|ath*|iwm*|iwl*|wpi*|rtwn*|ral*|rum*|urtwn*) is_wifi=1 ;;
-        *)                                                is_wired=1 ;;
+        wlan*|ath*|iwm*|iwl*|wpi*|rtwn*|ral*|rum*|urtwn*) 
+            is_wifi=1 
+            ;;
+        *)                                                
+            is_wired=1 
+            ;;
     esac
 
     if [ "$is_wifi" = 1 ]; then
         wifi_raw=$(ifconfig "$default_iface" 2>/dev/null)
         while IFS= read -r line; do
             case "$line" in
-                *SSID:*|*ssid:*|*ssid\ *) wifi_name=${line#*ssid* } ;;
+                *SSID:*|*ssid:*|*ssid\ *) 
+                    wifi_name=${line#*ssid* } 
+                    ;;
                 *signal:*|*signal\ *)     
                     set -- $line
                     signal=$(printf '%s\n' "$2" | tr -d '%, ')
@@ -213,43 +236,65 @@ do_output() {
     case "$output_format" in
         text)
             text="Net:"
-            if [ "$is_wired" = 1 ]; then neticon="$text Wired"
-            elif [ "$is_wifi" = 1 ]; then neticon="$text WiFi"
-            else neticon="$text None"
+            if [ "$is_wired" = 1 ]; then 
+                neticon="$text Wired"
+            elif [ "$is_wifi" = 1 ]; then 
+                neticon="$text WiFi"
+            else 
+                neticon="$text None"
             fi
-        ;;
+            ;;
         glyph)
-            if [ "$is_wired" = 1 ]; then neticon="󰈀"
+            if [ "$is_wired" = 1 ]; then 
+                neticon="󰈀"
             elif [ "$is_wifi" = 1 ] && [ -n "$quality" ]; then
-                if   [ "$quality" -ge 80 ]; then neticon="󰤨"
-                elif [ "$quality" -ge 60 ]; then neticon="󰤥"
-                elif [ "$quality" -ge 40 ]; then neticon="󰤢"
-                elif [ "$quality" -ge 20 ]; then neticon="󰤟"
-                else neticon="󰤯"
+                if [ "$quality" -ge 80 ]; then 
+                    neticon="󰤨"
+                elif [ "$quality" -ge 60 ]; then 
+                    neticon="󰤥"
+                elif [ "$quality" -ge 40 ]; then 
+                    neticon="󰤢"
+                elif [ "$quality" -ge 20 ]; then 
+                    neticon="󰤟"
+                else 
+                    neticon="󰤯"
                 fi
-            elif [ "$is_wifi" = 1 ]; then neticon="󰤯"
-            else neticon=""
+            elif [ "$is_wifi" = 1 ]; then 
+                neticon="󰤯"
+            else 
+                neticon=""
             fi
-        ;;
+            ;;
         icon)
-            if [ "$is_wired" = 1 ]; then neticon="$iconpath/network-wired.svg"
+            if [ "$is_wired" = 1 ]; then 
+                neticon="$iconpath/network-wired.svg"
             elif [ "$is_wifi" = 1 ] && [ -n "$quality" ]; then
-                if   [ "$quality" -ge 80 ]; then neticon="$iconpath/network-wireless-signal-excellent.svg"
-                elif [ "$quality" -ge 60 ]; then neticon="$iconpath/network-wireless-signal-good.svg"
-                elif [ "$quality" -ge 40 ]; then neticon="$iconpath/network-wireless-signal-ok.svg"
-                elif [ "$quality" -ge 20 ]; then neticon="$iconpath/network-wireless-signal-low.svg"
-                else neticon="$iconpath/network-wireless-signal-none.svg"
+                if [ "$quality" -ge 80 ]; then 
+                    neticon="$iconpath/network-wireless-signal-excellent.svg"
+                elif [ "$quality" -ge 60 ]; then 
+                    neticon="$iconpath/network-wireless-signal-good.svg"
+                elif [ "$quality" -ge 40 ]; then 
+                    neticon="$iconpath/network-wireless-signal-ok.svg"
+                elif [ "$quality" -ge 20 ]; then 
+                    neticon="$iconpath/network-wireless-signal-low.svg"
+                else 
+                    neticon="$iconpath/network-wireless-signal-none.svg"
                 fi
-            elif [ "$is_wifi" = 1 ]; then neticon="$iconpath/network-wireless-signal-none.svg"
-            else neticon="$iconpath/network-wired-offline.svg"
+            elif [ "$is_wifi" = 1 ]; then 
+                neticon="$iconpath/network-wireless-signal-none.svg"
+            else 
+                neticon="$iconpath/network-wired-offline.svg"
             fi
-        ;;
+            ;;
     esac
+    
     printf '%s\n' "${neticon:-}"
 }
 
 do_notify() {
-    exists dunstify || die "dunstify not found. Please install dunst."
+    if ! exists dunstify; then
+        die "dunstify not found. Please install dunst."
+    fi
 
     if [ "$net_is_up" != 1 ]; then
         dunstify -i "network-offline" -h string:x-dunst-stack-tag:netinfo "Network Details" "No active network connection."
@@ -261,15 +306,22 @@ do_notify() {
             route_dev=$(ip -4 route show dev "$default_iface" 2>/dev/null | grep ^default | head -n1)
             set -- $route_dev
             while [ $# -gt 0 ]; do
-                [ "$1" = "src" ] && ip_addr=$2
+                if [ "$1" = "src" ]; then
+                    ip_addr=$2
+                fi
                 shift
             done
         fi
+        
         if [ "$is_wifi" = 1 ]; then
             wifi_info=$(iw dev "$default_iface" info 2>/dev/null)
             while IFS= read -r line; do
                 set -- $line
-                case "$1" in channel|channel:|Channel|Channel:) channel=$2 ;; esac
+                case "$1" in 
+                    channel|channel:|Channel|Channel:) 
+                        channel=$2 
+                        ;; 
+                esac
             done <<EOF
 $wifi_info
 EOF
@@ -278,14 +330,22 @@ EOF
         route_dev=$(route -n get default 2>/dev/null | grep 'address:' | head -n1)
         set -- $route_dev
         while [ $# -gt 0 ]; do
-            [ "$1" = "address:" ] && ip_addr=$2
+            if [ "$1" = "address:" ]; then
+                ip_addr=$2
+            fi
             shift
         done
     fi
 
-    dns=
+    dns=""
     while IFS= read -r line; do
-        case "$line" in nameserver\ *) set -- $line; dns=$2; break ;; esac
+        case "$line" in 
+            nameserver\ *) 
+                set -- $line
+                dns=$2
+                break 
+                ;; 
+        esac
     done 2>/dev/null < /etc/resolv.conf
 
     formatted_msg="Interface: $default_iface\n"
@@ -306,21 +366,39 @@ do_open_manager() {
         if exists "$net_manager_app"; then
             $net_manager_app &
         else
-            $0 -c
+            "$0" -c
         fi
         exit 0
     fi
 
     if [ -z "$terminal" ] || ! exists "$terminal"; then
-        die "No valid terminal emulator found. Set one using -c."
+        yad --title="Missing Terminal" \
+            --text="No valid terminal emulator found or configured.\nPlease set one to open your CLI manager." \
+            --window-icon="dialog-warning" \
+            --borders=15 \
+            --button="Settings:0" --button="Cancel:1"
+        
+        if [ $? -eq 0 ]; then
+            "$0" -c
+        fi
+        exit 0
     fi
 
-    $terminal -e $net_manager_app &
+    $terminal -e "$net_manager_app" &
 }
 
 do_ping() {
     if [ -z "$terminal" ] || ! exists "$terminal"; then
-        die "No valid terminal emulator found. Set one using -c."
+        yad --title="Missing Terminal" \
+            --text="No valid terminal emulator found or configured.\nPlease set one to run the Ping Test." \
+            --window-icon="dialog-warning" \
+            --borders=15 \
+            --button="Settings:0" --button="Cancel:1"
+        
+        if [ $? -eq 0 ]; then
+            "$0" -c
+        fi
+        exit 0
     fi
 
     $terminal -e sh -c 'ping -c 4 1.1.1.1; printf "\nPress Enter to close..."; read dummy' &
@@ -330,8 +408,11 @@ do_config() {
     mkdir -p "$config_dir"
 
     while true; do
-        if [ "$net_manager_type" = "GUI" ]; then type_combo="GUI!CLI"
-        else type_combo="CLI!GUI"; fi
+        if [ "$net_manager_type" = "GUI" ]; then 
+            type_combo="GUI!CLI"
+        else 
+            type_combo="CLI!GUI"
+        fi
 
         new_configs=$(yad --title="Network Manager Config" \
             --window-icon="network-wired" \
@@ -344,11 +425,13 @@ do_config() {
             --field='!gtk-help!Manager Type':BTN "yad --info --title='Info' --borders=15 --text='Select CLI for terminal apps, or GUI for visual apps.'" \
             --field='!gtk-help!Terminal Emulator':BTN "yad --info --title='Info' --borders=15 --text='Type your terminal emulator command (Required for CLI tools).'")
 
-        [ -z "$new_configs" ] && break
+        if [ -z "$new_configs" ]; then
+            break
+        fi
 
-        IFS='|' read -r m_app m_type t_emu _ <<EOF
-$new_configs
-EOF
+        m_app=$(printf '%s\n' "$new_configs" | cut -d'|' -f1)
+        m_type=$(printf '%s\n' "$new_configs" | cut -d'|' -f2)
+        t_emu=$(printf '%s\n' "$new_configs" | cut -d'|' -f3)
 
         if [ -n "$m_app" ] && ! exists "$m_app"; then
             yad --title="Invalid App" --text="The application '$m_app' was not found in your system PATH." --image="dialog-error" --borders=15 --button="Try Again:0"
@@ -365,7 +448,10 @@ EOF
             fi
         fi
 
-        [ ! -f "$config_file" ] && touch "$config_file"
+        if [ ! -f "$config_file" ]; then
+            touch "$config_file"
+        fi
+        
         sed -i '/^net_manager_app=/d; /^net_manager_type=/d; /^terminal=/d; /^term_emu=/d' "$config_file"
         
         {
@@ -392,664 +478,89 @@ do_menu() {
 # ---------------------------------------------------------
 detect_os
 
+action=""
+output_format="text"
+
+err_act="Only one action can be chosen: -n -m -M -c -P"
+err_out="Only one output can be chosen: -t -f -i"
+
 while getopts ":tfinmMcPh" opt; do
     case ${opt} in
-        t) output_format="text" ;;
-        f) output_format="glyph" ;;
-        i) output_format="icon" ;;
-        n) action="notify" ;;
-        m) action="menu" ;;
-        M) action="open_manager" ;;
-        c) action="config" ;;
-        P) action="ping" ;;
-        h) show_help; exit 0 ;;
-        \?|*) printf "Invalid option. Use -h for help.\n" >&2; exit 1 ;;
+        h) 
+            show_help 
+            ;;
+        t) 
+            output_format="text" 
+            ;;
+        f) 
+            if [ "$output_format" != "text" ]; then die "$err_out"; fi
+            output_format="glyph" 
+            ;;
+        i) 
+            if [ "$output_format" != "text" ]; then die "$err_out"; fi
+            output_format="icon" 
+            ;;
+        n) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="notify" 
+            ;;
+        m) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="menu" 
+            ;;
+        M) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="open_manager" 
+            ;;
+        c) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="config" 
+            ;;
+        P) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="ping" 
+            ;;
+        \?|*) 
+            die "Invalid option. Use -h for help." 
+            ;;
     esac
 done
 
-if [ -z "$action" ] && [ -z "$output_format" ]; then
-    printf "Missing option. Use -h for help.\n" >&2
-    exit 1
+# --- Handle Actions ---
+if [ -n "$action" ]; then
+    case "$action" in
+        config)       
+            do_config 
+            exit 0 
+            ;;
+        open_manager) 
+            do_open_manager 
+            exit 0 
+            ;;
+        ping)         
+            do_ping 
+            exit 0 
+            ;;
+        menu)         
+            do_menu 
+            exit 0 
+            ;;
+        notify)
+            if [ "$os_family" = "linux" ]; then 
+                linux_detect
+            elif [ "$os_family" = "bsd" ]; then 
+                bsd_detect
+            fi
+            do_notify
+            exit 0
+            ;;
+    esac
 fi
 
-case "$action" in
-    config)       do_config ;;
-    open_manager) do_open_manager ;;
-    ping)         do_ping ;;
-    menu)         do_menu ;;
-    notify)
-        if [ "$os_family" = "linux" ]; then linux_detect
-        elif [ "$os_family" = "bsd" ]; then bsd_detect
-        fi
-        do_notify
-        ;;
-    *)
-        if [ "$os_family" = "linux" ]; then linux_detect
-        elif [ "$os_family" = "bsd" ]; then bsd_detect
-        fi
-        do_output
-        ;;
-esac#!/bin/sh
-# ==============================================================================
-# Script Name  : pmnetwork
-# Description  : PMT2e Network Agent - Lightweight network monitor and notifier
-# Author       : Max Franco <purpleleaf at ganoia.eu>
-# License      : GPL-3.0
-# Dependencies : iproute2, iw (Linux) | ifconfig, route (BSD) | dunstify, yad, jgmenu
-# Optional     : Nerd font of your choice for font glyph output
-# ==============================================================================
-
-iconpath="/usr/share/pmt2e/icons"
-scriptname=$(basename "$0")
-
-# ---------------------------------------------------------
-# Error handling & Utilities
-# ---------------------------------------------------------
-exists() { command -v "$1" >/dev/null 2>&1; }
-
-show_error() {
-    msg="$1"
-    if exists yad; then
-        yad --form --field="$msg:LBL" \
-            --title="Network Error" \
-            --window-icon="network-error" \
-            --borders=15 \
-            --width="500" --center
-    else
-        printf '%s\n' "$msg" 1>&2
-    fi
-}
-
-die() {
-    show_error "$1"
-    exit 1
-}
-
-# ---------------------------------------------------------
-# Configuration & Terminal Detection
-# ---------------------------------------------------------
-config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
-config_file="$config_dir/pmnetwork.conf"
-
-terminal_list="xterm $TERMINAL x-terminal-emulator alacritty kitty foot ghostty urxvt rxvt st qterminal gnome-terminal xfce4-terminal mate-terminal terminology"
-
-# Terminal detection (Aligned with pmu)
-terminal=""
-for term in $terminal_list; do
-    if exists "$term"; then terminal="$term"; break; fi
-done
-
-# Default Configuration
-net_manager_app="iwgtk"
-net_manager_type="GUI"
-
-if [ -f "$config_file" ] && [ -r "$config_file" ]; then
-    while IFS='=' read -r key val || [ -n "$key" ]; do
-        val="${val%\"}"; val="${val#\"}"
-        val="${val%\'}"; val="${val#\'}"
-        case "$key" in
-            net_manager_app)  net_manager_app="$val" ;;
-            net_manager_type) net_manager_type="$val" ;;
-            terminal)         terminal="$val" ;;
-            term_emu)         terminal="$val" ;; # Legacy support
-        esac
-    done < "$config_file"
-fi
-
-# Initialize state variables
-net_is_up=0
-is_wifi=0
-is_wired=0
-quality=""
-signal=""
-action="output"
-output_format="icon"
-
-# ---------------------------------------------------------
-# OS detection & RSSI Conversion
-# ---------------------------------------------------------
-detect_os() {
-    case "$(uname -s)" in
-        Linux)                  os_family="linux" ;;
-        FreeBSD|OpenBSD|NetBSD) os_family="bsd" ;;
-        *)                      os_family="unknown" ;;
-    esac
-}
-
-calculate_quality() {
-    rssi="$1"
-    if [ -z "$rssi" ]; then
-        quality=""
-        return
-    fi
-    if [ "$rssi" -le -100 ]; then quality=0
-    elif [ "$rssi" -ge -50 ]; then quality=100
-    else quality=$(( 2 * (rssi + 100) ))
-    fi
-}
-
-# ---------------------------------------------------------
-# Network data collection
-# ---------------------------------------------------------
-linux_detect() {
-    route=$(ip -4 route show default 2>/dev/null | head -n1)
-    set -- $route
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            dev) default_iface=$2 ;;
-            via) gateway=$2 ;;
-            src) ip_addr=$2 ;;
-        esac
-        shift
-    done
-
-    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then net_is_up=1; fi
-
-    if [ "$net_is_up" = 1 ]; then
-        if iw dev "$default_iface" info >/dev/null 2>&1; then is_wifi=1
-        else is_wired=1
-        fi
-    fi
-
-    if [ "$is_wifi" = 1 ]; then
-        wifi_link=$(iw dev "$default_iface" link 2>/dev/null)
-        while IFS= read -r line; do
-            case "$line" in
-                *SSID:*)  wifi_name=${line#*SSID: } ;;
-                *signal:*) set -- $line; signal=$2 ;;
-            esac
-        done <<EOF
-$wifi_link
-EOF
-        calculate_quality "$signal"
-    fi
-}
-
-bsd_detect() {
-    route=$(route -n get default 2>/dev/null) || route=
-    if [ -n "$route" ]; then
-        while IFS= read -r line; do
-            set -- $line
-            while [ $# -gt 0 ]; do
-                case "$1" in
-                    gateway:)   gateway=$2 ;;
-                    interface:) default_iface=$2 ;;
-                    address:)   ip_addr=$2 ;;
-                esac
-                shift
-            done
-        done <<EOF
-$route
-EOF
-    fi
-
-    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then net_is_up=1; fi
-
-    case "$default_iface" in
-        wlan*|ath*|iwm*|iwl*|wpi*|rtwn*|ral*|rum*|urtwn*) is_wifi=1 ;;
-        *)                                                is_wired=1 ;;
-    esac
-
-    if [ "$is_wifi" = 1 ]; then
-        wifi_raw=$(ifconfig "$default_iface" 2>/dev/null)
-        while IFS= read -r line; do
-            case "$line" in
-                *SSID:*|*ssid:*|*ssid\ *) wifi_name=${line#*ssid* } ;;
-                *signal:*|*signal\ *)     set -- $line; signal=$2 ;;
-            esac
-        done <<EOF
-$wifi_raw
-EOF
-        calculate_quality "$signal"
-    fi
-}
-
-# ---------------------------------------------------------
-# Action Handlers
-# ---------------------------------------------------------
-do_output() {
-    case "$output_format" in
-        text)
-            text="Net:"
-            if [ "$is_wired" = 1 ]; then neticon="$text Wired"
-            elif [ "$is_wifi" = 1 ]; then neticon="$text WiFi"
-            else neticon="$text None"
-            fi
-        ;;
-        glyph)
-            if [ "$is_wired" = 1 ]; then neticon="󰈀"
-            elif [ "$is_wifi" = 1 ] && [ -n "$quality" ]; then
-                if   [ "$quality" -ge 80 ]; then neticon="󰤨"
-                elif [ "$quality" -ge 60 ]; then neticon="󰤥"
-                elif [ "$quality" -ge 40 ]; then neticon="󰤢"
-                elif [ "$quality" -ge 20 ]; then neticon="󰤟"
-                else neticon="󰤯"
-                fi
-            elif [ "$is_wifi" = 1 ]; then neticon="󰤯"
-            else neticon=""
-            fi
-        ;;
-        icon)
-            if [ "$is_wired" = 1 ]; then neticon="$iconpath/network-wired.svg"
-            elif [ "$is_wifi" = 1 ] && [ -n "$quality" ]; then
-                if   [ "$quality" -ge 80 ]; then neticon="$iconpath/network-wireless-signal-excellent.svg"
-                elif [ "$quality" -ge 60 ]; then neticon="$iconpath/network-wireless-signal-good.svg"
-                elif [ "$quality" -ge 40 ]; then neticon="$iconpath/network-wireless-signal-ok.svg"
-                elif [ "$quality" -ge 20 ]; then neticon="$iconpath/network-wireless-signal-low.svg"
-                else neticon="$iconpath/network-wireless-signal-none.svg"
-                fi
-            elif [ "$is_wifi" = 1 ]; then neticon="$iconpath/network-wireless-signal-none.svg"
-            else neticon="$iconpath/network-wired-offline.svg"
-            fi
-        ;;
-    esac
-    printf '%s\n' "${neticon:-}"
-}
-
-do_notify() {
-    exists dunstify || die "dunstify not found. Please install dunst."
-
-    if [ "$net_is_up" != 1 ]; then
-        dunstify -i "network-offline" -h string:x-dunst-stack-tag:netinfo "Network Details" "No active network connection."
-        exit 0
-    fi
-
-    if [ "$os_family" = "linux" ]; then
-        if [ -z "$ip_addr" ]; then
-            route_dev=$(ip -4 route show dev "$default_iface" 2>/dev/null | grep ^default | head -n1)
-            set -- $route_dev
-            while [ $# -gt 0 ]; do
-                [ "$1" = "src" ] && ip_addr=$2
-                shift
-            done
-        fi
-        if [ "$is_wifi" = 1 ]; then
-            wifi_info=$(iw dev "$default_iface" info 2>/dev/null)
-            while IFS= read -r line; do
-                set -- $line
-                case "$1" in channel|channel:|Channel|Channel:) channel=$2 ;; esac
-            done <<EOF
-$wifi_info
-EOF
-        fi
-    elif [ "$os_family" = "bsd" ] && [ -z "$ip_addr" ]; then
-        route_dev=$(route -n get default 2>/dev/null | grep 'address:' | head -n1)
-        set -- $route_dev
-        while [ $# -gt 0 ]; do
-            [ "$1" = "address:" ] && ip_addr=$2
-            shift
-        done
-    fi
-
-    dns=
-    while IFS= read -r line; do
-        case "$line" in nameserver\ *) set -- $line; dns=$2; break ;; esac
-    done 2>/dev/null < /etc/resolv.conf
-
-    formatted_msg="Interface: $default_iface\n"
-    if [ "$is_wifi" = 1 ]; then
-        formatted_msg="${formatted_msg}Type: WiFi\nSSID: ${wifi_name:-n/a}\nRSSI: ${signal:-n/a} dBm\nQuality: ${quality:-n/a}%\nChannel: ${channel:-n/a}\n\n"
-        icon="network-wireless-signal-excellent"
-    else
-        formatted_msg="${formatted_msg}Type: Ethernet\n\n"
-        icon="network-wired"
-    fi
-    formatted_msg="${formatted_msg}IP: ${ip_addr:-none}\nGateway: ${gateway:-none}\nDNS: ${dns:-none}"
-
-    dunstify -i "$icon" -h string:x-dunst-stack-tag:netinfo "Network Details" "$formatted_msg"
-}
-
-do_open_manager() {
-    if [ "$net_manager_type" = "GUI" ]; then
-        if exists "$net_manager_app"; then
-            $net_manager_app &
-        else
-            $0 -c
-        fi
-        exit 0
-    fi
-
-    if [ -z "$terminal" ] || ! exists "$terminal"; then
-        yad --title="Missing Terminal" \
-            --text="No valid terminal emulator found or configured.\nPlease set one to open your CLI manager." \
-            --window-icon="dialog-warning" \
-            --borders=15 \
-            --button="Settings:0" --button="Cancel:1"
-        [ $? -eq 0 ] && $0 -c
-        exit 0
-    fi
-
-    $terminal -e $net_manager_app &
-}
-
-do_ping() {
-    if [ -z "$terminal" ] || ! exists "$terminal"; then
-        yad --title="Missing Terminal" \
-            --text="No valid terminal emulator found or configured.\nPlease set one to run the Ping Test." \
-            --window-icon="dialog-warning" \
-            --borders=15 \
-            --button="Settings:0" --button="Cancel:1"
-        [ $? -eq 0 ] && $0 -c
-        exit 0
-    fi
-
-    $terminal -e sh -c 'ping -c 4 1.1.1.1; printf "\nPress Enter to close..."; read dummy' &
-}
-
-do_config() {
-    mkdir -p "$config_dir"
-
-    while true; do
-        if [ "$net_manager_type" = "GUI" ]; then type_combo="GUI!CLI"
-        else type_combo="CLI!GUI"; fi
-
-        new_configs=$(yad --title="Network Manager Config" \
-            --window-icon="network-wired" \
-            --form \
-            --columns=2 \
-            --field="Manager App:" "$net_manager_app" \
-            --field="Manager Type:":CB "$type_combo" \
-            --field="Terminal Emulator:" "$terminal" \
-            --field='!gtk-help!Manager App':BTN "yad --info --title='Info' --borders=15 --text='Type the network manager command to launch (e.g., iwgtk, nmtui, connman-gtk).'" \
-            --field='!gtk-help!Manager Type':BTN "yad --info --title='Info' --borders=15 --text='Select CLI for terminal apps, or GUI for visual apps.'" \
-            --field='!gtk-help!Terminal Emulator':BTN "yad --info --title='Info' --borders=15 --text='Type your terminal emulator command (Required for CLI tools).'")
-
-        [ -z "$new_configs" ] && break
-
-        IFS='|' read -r m_app m_type t_emu _ <<EOF
-$new_configs
-EOF
-
-        if [ -n "$m_app" ] && ! exists "$m_app"; then
-            yad --title="Invalid App" --text="The application '$m_app' was not found in your system PATH." --image="dialog-error" --borders=15 --button="Try Again:0"
-            continue
-        fi
-
-        if [ "$m_type" = "CLI" ]; then
-            if [ -n "$t_emu" ] && ! exists "$t_emu"; then
-                yad --title="Invalid Terminal" --text="You selected CLI manager, but '$t_emu' was not found." --image="dialog-error" --borders=15 --button="Try Again:0"
-                continue
-            elif [ -z "$t_emu" ]; then
-                yad --title="Missing Terminal" --text="You must specify a terminal emulator for CLI managers." --image="dialog-error" --borders=15 --button="Try Again:0"
-                continue
-            fi
-        fi
-
-        [ ! -f "$config_file" ] && touch "$config_file"
-        # Delete old lines including legacy term_emu
-        sed -i '/^net_manager_app=/d; /^net_manager_type=/d; /^terminal=/d; /^term_emu=/d' "$config_file"
-
-        {
-          echo "net_manager_app='$m_app'"
-          echo "net_manager_type='$m_type'"
-          echo "terminal='$t_emu'"
-        } >> "$config_file"
-        break
-    done
-}
-
-do_menu() {
-    menu_list=$(
-        printf "Show Details,%s -n\n" "$scriptname"
-        printf "Connection Manager,%s -M\n" "$scriptname"
-        printf "Ping Test,%s -P\n" "$scriptname"
-        printf "Configuration,%s -c\n" "$scriptname"
-    )
-    printf '%s\n' "$menu_list" | createjgmenu
-}
-
-# ---------------------------------------------------------
-# Execution
-# ---------------------------------------------------------
-detect_os
-
-while getopts ":tfinmMcP" opt; do
-    case ${opt} in
-        t) output_format="text" ;;
-        f) output_format="glyph" ;;
-        i) output_format="icon" ;;
-        n) action="notify" ;;
-        m) action="menu" ;;
-        M) action="open_manager" ;;
-        c) action="config" ;;
-        P) action="ping" ;;
-        \?|*) die "Invalid option -$OPTARG. Use -t, -f, -i, -n, -m, -M, -c, or -P." ;;
-    esac
-done
-
-# Bypass hardware polling for purely UI actions
-case "$action" in
-    config)       do_config ;;
-    open_manager) do_open_manager ;;
-    ping)         do_ping ;;
-    menu)         do_menu ;;
-    *)
-        if [ "$os_family" = "linux" ]; then linux_detect
-        elif [ "$os_family" = "bsd" ]; then bsd_detect
-        fi
-
-        if [ "$action" = "notify" ]; then do_notify
-        else do_output
-        fi
-        ;;
-esac#!/bin/sh
-# ==============================================================================
-# Script Name  : pmnetwork
-# Description  : PMT2e Network Agent - Lightweight network monitor for panels
-# Author       : Max Franco <purpleleaf at ganoia.eu>
-# License      : GPL-3.0
-# Dependencies : iproute2, iw (Linux) | ifconfig, route (BSD) | yad (optional)
-# Optional     : Nerd font of your choice for font glyph output
-# ==============================================================================
-
-iconpath="/usr/share/pmt2e/icons"
-scriptname=$(basename "$0")
-
-# Initialize state variables
-net_is_up=0
-is_wifi=0
-is_wired=0
-quality=""
-signal=""
-
-# ---------------------------------------------------------
-# Error handling
-# ---------------------------------------------------------
-
-show_error() {
-    msg="$1"
-    if command -v yad >/dev/null 2>&1; then
-        yad --form --field="$msg:LBL" \
-            --title="Network Error" \
-            --window-icon="network-error" \
-            --width="500" --center
-    else
-        printf '%s\n' "$msg" 1>&2
-    fi
-}
-
-die() {
-    show_error "$1"
-    exit 1
-}
-
-# ---------------------------------------------------------
-# OS detection (Linux vs BSD)
-# ---------------------------------------------------------
-
-detect_os() {
-    case "$(uname -s)" in
-        Linux)                  os_family="linux" ;;
-        FreeBSD|OpenBSD|NetBSD) os_family="bsd" ;;
-        *)                      os_family="unknown" ;;
-    esac
-}
-
-# ---------------------------------------------------------
-# RSSI → quality conversion
-# ---------------------------------------------------------
-calculate_quality() {
-    rssi="$1"
-    if [ -z "$rssi" ]; then
-        quality=""
-        return
-    fi
-    if [ "$rssi" -le -100 ]; then
-        quality=0
-    elif [ "$rssi" -ge -50 ]; then
-        quality=100
-    else
-        quality=$(( 2 * (rssi + 100) ))
-    fi
-}
-
-# ---------------------------------------------------------
-# Network data collection (Linux and BSD)
-# ---------------------------------------------------------
-
-linux_detect() {
-    route=$(ip -4 route show default 2>/dev/null | head -n1)
-    set -- $route
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            dev) default_iface=$2 ;;
-            via) gateway=$2 ;;
-        esac
-        shift
-    done
-    
-    # If we have a gateway and a default route there must be an active network
-    if [ -n "$gateway" ] && [ -n "$default_iface" ]; then
-        net_is_up=1
-    fi
-    
-    # Wi‑Fi vs wired detection
-    if [ "$net_is_up" = 1 ]; then
-        if iw dev "$default_iface" info >/dev/null 2>&1; then
-            is_wifi=1
-        else
-            is_wired=1
-        fi
-    fi
-    
-    # Wi‑Fi parsing
-    if [ "$is_wifi" = 1 ]; then
-        # awk handles arbitrary leading spaces/tabs better than cut
-        signal=$(iw dev "$default_iface" link 2>/dev/null | awk '/signal:/ {print $2; exit}')
-        calculate_quality "$signal"
-    fi
-}
-
-bsd_detect() {
-    # Detect default interface
-    default_iface=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exit}')
-    
-    # Check if interface is up
-    if [ -n "$default_iface" ]; then
-        if ifconfig "$default_iface" 2>/dev/null | grep -q "status: active"; then
-            net_is_up=1
-        fi
-    fi
-    
-    # Detect WiFi vs wired
-    if [ "$net_is_up" = 1 ]; then
-        case "$default_iface" in
-            wlan*|ath*|iwm*|iwl*|wpi*|rtwn*|ral*|rum*|urtwn*)
-                is_wifi=1
-            ;;
-            *)
-                is_wired=1
-            ;;
-        esac
-    fi
-    
-    # WiFi details
-    if [ "$is_wifi" = 1 ]; then
-        wifi_raw=$(ifconfig "$default_iface" 2>/dev/null)
-        while IFS= read -r line; do
-            case "$line" in
-                *signal:*)  
-                    # Must be unquoted to split words
-                    set -- $line 
-                    signal=$2 
-                    ;;
-            esac
-        done <<EOF
-$wifi_raw
-EOF
-        calculate_quality "$signal"
-    fi
-}
-
-# ---------------------------------------------------------
-# Execution
-# ---------------------------------------------------------
-
-detect_os
-
-# OS‑specific network logic
-if [ "$os_family" = "linux" ]; then
+# --- Handle Output ---
+if [ "$os_family" = "linux" ]; then 
     linux_detect
-elif [ "$os_family" = "bsd" ]; then
+elif [ "$os_family" = "bsd" ]; then 
     bsd_detect
 fi
-
-# Argument parsing (Default to -i if none provided)
-output="icon"
-[ $# -gt 0 ] && output=""
-
-while getopts ":tfi" opt; do
-    case ${opt} in
-        t) output="text" ;;
-        f) output="glyph" ;;
-        i) output="icon" ;;
-        \?|*) die "Invalid option -$OPTARG. Use -t, -f, or -i." ;;
-    esac
-done
-
-case "$output" in
-    text)
-        text="Net:"
-        if [ "$is_wired" = 1 ]; then
-            neticon="$text Wired"
-        elif [ "$is_wifi" = 1 ]; then
-            neticon="$text WiFi"
-        else
-            neticon="$text None"
-        fi
-    ;;
-    glyph)
-        if [ "$is_wired" = 1 ]; then
-            neticon="󰈀"
-        elif [ "$is_wifi" = 1 ] && [ -n "$quality" ]; then
-            if   [ "$quality" -ge 80 ]; then neticon="󰤨"
-            elif [ "$quality" -ge 60 ]; then neticon="󰤥"
-            elif [ "$quality" -ge 40 ]; then neticon="󰤢"
-            elif [ "$quality" -ge 20 ]; then neticon="󰤟"
-            else neticon="󰤯"
-            fi
-        elif [ "$is_wifi" = 1 ]; then
-            neticon="󰤯"
-        else
-            neticon=""
-        fi
-    ;;
-    icon)
-        if [ "$is_wired" = 1 ]; then
-            neticon="$iconpath/network-wired.svg"
-        elif [ "$is_wifi" = 1 ] && [ -n "$quality" ]; then
-            if   [ "$quality" -ge 80 ]; then neticon="$iconpath/network-wireless-signal-excellent.svg"
-            elif [ "$quality" -ge 60 ]; then neticon="$iconpath/network-wireless-signal-good.svg"
-            elif [ "$quality" -ge 40 ]; then neticon="$iconpath/network-wireless-signal-ok.svg"
-            elif [ "$quality" -ge 20 ]; then neticon="$iconpath/network-wireless-signal-low.svg"
-            else neticon="$iconpath/network-wireless-signal-none.svg"
-            fi
-        elif [ "$is_wifi" = 1 ]; then
-            neticon="$iconpath/network-wireless-signal-none.svg"
-        else
-            neticon="$iconpath/network-wired-offline.svg"
-        fi
-    ;;
-esac
-
-printf '%s\n' "${neticon:-}"
+do_output
