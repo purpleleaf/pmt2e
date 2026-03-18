@@ -1,56 +1,21 @@
 #!/bin/sh
 # ==============================================================================
 # Script Name  : pmbrightness
-# Description  : PMT2e Brightness Agent - Support for light, brightnessctl, xbacklight
+# Description  : PMT2e Brightness Agent - Strict Verticality Gold Standard
 # Author       : Max Franco <purpleleaf at ganoia.eu>
 # License      : GPL-3.0
 # Dependencies : light OR brightnessctl OR xbacklight, jgmenu, dunstify, yad
-# Optional     : Nerd font of your choice for font glyph output
 # ==============================================================================
 
 iconpath="/usr/share/pmt2e/icons"
 scriptname=$(basename "$0")
-lock_file="/tmp/${scriptname}.lock"
+gui_lock="/tmp/${scriptname}_gui.lock"
 
 # ---------------------------------------------------------
-# Error handling & Utilities
+# Utilities & Requirements Check
 # ---------------------------------------------------------
 exists() { 
     command -v "$1" >/dev/null 2>&1 
-}
-
-show_dialog() {
-    # If a lock exists, a window is already open. Return silently.
-    if [ -f "$lock_file" ]; then
-        return
-    fi
-    
-    # Create the lock
-    touch "$lock_file"
-    
-    yad --title="$2" \
-        --text="$1" \
-        --image="$3" \
-        --window-icon="$3" \
-        --borders=15 \
-        --button="Close:0"
-    
-    # Remove lock when window is closed
-    rm -f "$lock_file"
-}
-
-die() {
-    if [ "$1" = "-y" ]; then
-        shift
-        if exists yad; then 
-            show_dialog "$*" "Brightness Error" "dialog-error"
-        else 
-            printf '%s\n' "$*" 1>&2
-        fi
-    else
-        printf '%s\n' "$*" 1>&2
-    fi
-    exit 1
 }
 
 show_help() {
@@ -69,6 +34,47 @@ show_help() {
     printf "  -i        Print path to brightness SVG icon\n"
     exit 0
 }
+
+show_dialog() {
+    if [ -f "$gui_lock" ]; then
+        find "/tmp" -name "$(basename "$gui_lock")" -mmin +1 -delete
+        if [ -f "$gui_lock" ]; then
+            return
+        fi
+    fi
+    
+    touch "$gui_lock"
+    
+    yad --title="$2" \
+        --text="$1" \
+        --image="$3" \
+        --window-icon="$3" \
+        --borders=15 \
+        --button="Close:0" \
+        --center
+    
+    rm -f "$gui_lock"
+}
+
+die() {
+    msg="$1"
+    if [ "$2" = "-y" ]; then
+        if exists yad; then 
+            show_dialog "$msg" "Brightness Error" "dialog-error"
+        else 
+            printf '%s\n' "$msg" 1>&2
+        fi
+    else
+        printf '%s\n' "$msg" 1>&2
+    fi
+    exit 1
+}
+
+for req in yad jgmenu; do
+    if ! exists "$req"; then
+        die "Error: dependency '$req' is not installed."
+    fi
+done
 
 # ---------------------------------------------------------
 # Backlight Backend Detection & Wrappers
@@ -105,7 +111,7 @@ get_bri() {
 
 set_bri() {
     if [ -z "$BACKEND" ]; then
-        die -y "No backlight tool found. Please install 'light', 'brightnessctl', or 'xbacklight'."
+        die "No backlight tool found. Please install 'light', 'brightnessctl', or 'xbacklight'." "-y"
     fi
 
     val="$1"
@@ -123,7 +129,7 @@ set_bri() {
             ;;
         brightnessctl)
             if [ "$mode" = "set" ]; then
-                brightnessctl set "$val%"
+                brightnessctl set "${val}%"
             elif [ "$mode" = "up" ]; then
                 brightnessctl set +5%
             elif [ "$mode" = "down" ]; then
@@ -160,7 +166,7 @@ send_notification() {
         icon="display-brightness-low-symbolic"
     fi
 
-    dunstify -t 1000 -h string:x-dunst-stack-tag:brightness -i "$icon" -h int:value:"$cur" "Brightness: $cur%"
+    dunstify -t 1000 -h string:x-dunst-stack-tag:brightness -i "$icon" -h int:value:"$cur" "Brightness: ${cur}%"
 }
 
 # ---------------------------------------------------------
@@ -170,8 +176,8 @@ action=""
 output="text"
 input_val=""
 
-err_act="Only one action can be chosen: -u -d -s -g -m"
-err_out="Only one output can be chosen: -t -f -i"
+err_act="Only one action can be chosen."
+err_out="Only one output can be chosen."
 
 while getopts ":huds:mgift" opt; do
     case "${opt}" in
@@ -225,7 +231,7 @@ if [ -n "$action" ]; then
             if exists pmgui-scale; then
                 pmgui-scale -b
             else
-                die -y "pmgui-scale utility not found."
+                die "pmgui-scale utility not found." "-y"
             fi
             exit 0
             ;;
@@ -245,7 +251,6 @@ if [ -n "$action" ]; then
         up|down|set)
             set_bri "$input_val" "$action"
             send_notification
-            # Actions do not print output unless requested manually by panel scripts
             exit 0
             ;;
     esac
@@ -253,12 +258,19 @@ fi
 
 # --- Handle Continuous Output (Status Bar) ---
 bri=$(get_bri)
+backend_err=$?
 
-if [ $? -ne 0 ] || [ -z "$BACKEND" ]; then
+if [ "$backend_err" -ne 0 ] || [ -z "$BACKEND" ]; then
     case "$output" in
-        text)  printf 'Bri: N/A\n' ;;
-        glyph) printf '󰃠 <span color="red">󱈸</span>\n' ;;
-        icon)  printf '%s/bri-error.svg\n' "$iconpath" ;;
+        text)  
+            printf 'Bri: N/A\n' 
+            ;;
+        glyph) 
+            printf '󰃠 <span color="red">󱈸</span>\n' 
+            ;;
+        icon)  
+            printf '%s/bri-error.svg\n' "$iconpath" 
+            ;;
     esac
     exit 0
 fi
