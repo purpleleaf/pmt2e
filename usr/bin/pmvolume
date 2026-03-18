@@ -64,7 +64,7 @@ show_dialog() {
 
 die() {
     msg="$1"
-    if [ "$2" = "-g" ]; then
+    if [ "$2" = "-y" ]; then
         if exists yad; then
             show_dialog "$msg" "Volume Error" "dialog-error"
         else
@@ -157,7 +157,7 @@ get_channel() {
     fi
 
     if [ -z "$mixer_channel" ]; then
-        die "No volume control available on this device." -g
+        die "No volume control available on this device." "-y"
     fi
 }
 
@@ -182,7 +182,7 @@ get_volume() {
 
     case "$vol_out" in
         ''|*[!0-9]*)
-            die "Failed to read numeric volume from control: $mixer_channel" -g
+            die "Failed to read numeric volume from control: $mixer_channel" "-y"
             ;;
         *)
             vol="$vol_out"
@@ -365,7 +365,7 @@ do_select_card() {
     if [ -z "$cards" ]; then
         # Rimuoviamo il lock prima di chiamare la GUI di errore
         rm -f "$gui_lock"
-        die "No ALSA sound cards detected." -g
+        die "No ALSA sound cards detected." "-y"
     fi
 
     combo_string=$(printf '%s\n' "$cards" | tr '\n' '^' | sed 's/\^$//')
