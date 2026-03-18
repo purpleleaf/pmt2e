@@ -1,7 +1,7 @@
 #!/bin/sh
 # ==============================================================================
 # Script Name  : pmweather
-# Description  : PMT2e Weather Agent - Unified and POSIX compliant
+# Description  : PMT2e Weather Agent - Unified, POSIX compliant & Multilingual
 # Author       : Max Franco <purpleleaf at ganoia.eu>
 # License      : GPL-3.0
 # Credits      : nilsonmorale (ywtray settings concept) - https://github.com/Dimorld/ywtray
@@ -11,7 +11,8 @@
 # Dependencies : curl, jq, yad, dunstify, jgmenu, pkill
 # ==============================================================================
 
-iconpath="/usr/share/pmt2e/wheather_icons"
+iconpath="/usr/share/pmt2e/weather_icons"
+translation_file="/usr/share/pmt2e/weather_map.json"
 scriptname=$(basename "$0")
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
 config_file="$config_dir/pmweather.conf"
@@ -20,8 +21,8 @@ gui_lock="/tmp/${scriptname}_gui.lock"
 # ---------------------------------------------------------
 # Utilities & Requirements Check
 # ---------------------------------------------------------
-exists() { 
-    command -v "$1" >/dev/null 2>&1 
+exists() {
+    command -v "$1" >/dev/null 2>&1
 }
 
 show_dialog() {
@@ -67,7 +68,7 @@ done
 
 sys_lang=$(printf '%s' "${LANG:-en}" | cut -d_ -f1 | cut -d. -f1)
 
-# Default panel signals (Must be distinct from pmupdater)
+# Default panel signals
 waybar_signal="10"
 sfwbar_signal="6"
 refresh_cmd=""
@@ -78,23 +79,17 @@ show_help() {
     printf "==============================================================\n"
     printf "Usage: %s [ACTION] [OUTPUT_FORMAT]\n\n" "$scriptname"
     printf "DESCRIPTION:\n"
-    printf "  A unified, POSIX-compliant weather agent that fetches\n"
-    printf "  forecasts, displays notifications, and provides a GUI.\n\n"
+    printf "  A multilingual weather agent using Open-Meteo API.\n\n"
     printf "ACTIONS:\n"
-    printf "  -n    Show desktop notification with current weather info.\n"
-    printf "  -F    Show 3-day forecast in a rich YAD GUI table.\n"
-    printf "  -c    Open the configuration GUI to set location and units.\n"
-    printf "  -m    Show the jgmenu context menu.\n"
-    printf "  -h    Show this help message and exit.\n\n"
-    printf "OUTPUT FORMATS (Default is -i):\n"
-    printf "  -t    Print the weather description as plain text.\n"
-    printf "  -g    Print the Nerd Font weather glyph.\n"
-    printf "  -i    Print the full path to the SVG weather icon.\n\n"
-    printf "EXAMPLES:\n"
-    printf "  %s -n          # Show a weather notification\n" "$scriptname"
-    printf "  %s -c          # Configure your city/location\n" "$scriptname"
-    printf "  %s -t          # Print textual description\n" "$scriptname"
-    printf "==============================================================\n"
+    printf "  -n    Show desktop notification.\n"
+    printf "  -F    Show 3-day forecast GUI.\n"
+    printf "  -c    Open configuration GUI.\n"
+    printf "  -m    Show context menu.\n"
+    printf "  -h    Show help.\n\n"
+    printf "OUTPUT FORMATS:\n"
+    printf "  -t    Plain text description.\n"
+    printf "  -g    Nerd Font glyph.\n"
+    printf "  -i    Full path to SVG icon.\n"
     exit 0
 }
 
@@ -124,7 +119,7 @@ search_location() {
     search_term="$1"
     results=$(curl -s -A "PMT2e-Weather-Agent" \
         "https://nominatim.openstreetmap.org/search?q=${search_term}&format=json&limit=5")
-    
+
     if [ -z "$results" ] || [ "$results" = "[]" ]; then
         return 1
     fi
@@ -132,7 +127,7 @@ search_location() {
 }
 
 do_config() {
-    if [ -f "$config_file" ]; then 
+    if [ -f "$config_file" ]; then
         . "$config_file"
     fi
 
@@ -142,13 +137,13 @@ do_config() {
             --form --columns=2 \
             --field="City/Location:" "${location}" \
             --field="Temp Unit:CB" "${temp_unit:-celsius}!celsius!fahrenheit" \
-            --field="Icon Style:CB" "${icon_type:-coloured}!coloured!monochrome!glyphs" \
+            --field="Icon Style:CB" "${icon_type:-coloured}!coloured!monochrome" \
             --field='!gtk-find!Search':BTN "sh -c 'exit 0'" \
             --field='!gtk-help!Location':BTN "yad --info --text='Enter city and Search. Pick from list.' --borders=15" \
             --button="Save:0" --button="Cancel:1" \
             --borders=15)
 
-        if [ $? -ne 0 ]; then 
+        if [ $? -ne 0 ]; then
             break
         fi
 
@@ -170,7 +165,7 @@ do_config() {
         if [ $? -eq 0 ] && [ -n "$selection" ]; then
             lat=$(printf '%s' "$selection" | cut -d'|' -f1)
             lon=$(printf '%s' "$selection" | cut -d'|' -f2)
-            
+
             mkdir -p "$config_dir"
             cat <<EOF > "$config_file"
 latitude="$lat"
@@ -178,8 +173,6 @@ longitude="$lon"
 location="$loc"
 temp_unit="$t_unit"
 icon_type="$i_style"
-windspeed_unit="kmh"
-precipitation_unit="mm"
 waybar_signal="${waybar_signal}"
 sfwbar_signal="${sfwbar_signal}"
 EOF
@@ -191,76 +184,70 @@ EOF
 }
 
 # ---------------------------------------------------------
-# Weather Engine Mapping
+# Weather Engine & Translation
 # ---------------------------------------------------------
 get_info_by_code() {
     code="$1"
     day_state="$2"
-    
+
     case "$code" in
-        0) 
+        0|1)
+            cat="clear"
+            glyph="󰖙"
             if [ "$day_state" = "1" ]; then
-                if [ "$sys_lang" = "it" ]; then
-                    d="Sereno"
-                else
-                    d="Clear sky"
-                fi
-                echo "clear-day.svg||$d"
+                icon="clear-day.svg"
             else
-                if [ "$sys_lang" = "it" ]; then
-                    d="Sereno"
-                else
-                    d="Clear sky"
-                fi
-                echo "clear-night.svg||$d"
+                icon="clear-night.svg"
             fi
             ;;
-        1|2|3)
-            if [ "$sys_lang" = "it" ]; then
-                d="Nuvoloso"
-            else
-                d="Cloudy"
-            fi
-            
+        2|3)
+            cat="cloudy"
+            glyph="󰖐"
             if [ "$day_state" = "1" ]; then
-                echo "cloudy-2-day.svg||$d"
+                icon="cloudy-2-day.svg"
             else
-                echo "cloudy-2-night.svg||$d"
+                icon="cloudy-2-night.svg"
             fi
             ;;
         45|48)
-            if [ "$sys_lang" = "it" ]; then
-                d="Nebbia"
-            else
-                d="Fog"
-            fi
-            echo "fog.svg||$d"
+            cat="fog"
+            glyph="󰖑"
+            icon="fog.svg"
             ;;
-        51|53|55|61|63|65)
-            if [ "$sys_lang" = "it" ]; then
-                d="Pioggia"
-            else
-                d="Rain"
-            fi
-            echo "rainy-3.svg||$d"
+        51|53|55|56|57)
+            cat="drizzle"
+            glyph="󰖗"
+            icon="rainy-1.svg"
             ;;
-        71|73|75)
-            if [ "$sys_lang" = "it" ]; then
-                d="Neve"
-            else
-                d="Snow"
-            fi
-            echo "snowy-3.svg||$d"
+        61|63|65|66|67|80|81|82)
+            cat="rain"
+            glyph="󰖖"
+            icon="rainy-3.svg"
+            ;;
+        71|73|75|77|85|86)
+            cat="snow"
+            glyph="󰖘"
+            icon="snowy-3.svg"
+            ;;
+        95|96|99)
+            cat="thunder"
+            glyph="󰖓"
+            icon="thunder.svg"
             ;;
         *)
-            if [ "$sys_lang" = "it" ]; then
-                d="Sconosciuto"
-            else
-                d="Unknown"
-            fi
-            echo "default-no.svg|󰨹|$d"
+            cat="unknown"
+            glyph="󰨹"
+            icon="default-no.svg"
             ;;
     esac
+
+    if [ -f "$translation_file" ]; then
+        desc=$(jq -r ".\"$cat\".$sys_lang // .\"$cat\".en" "$translation_file")
+    else
+        desc="$cat"
+    fi
+
+    echo "$icon|$glyph|$desc"
 }
 
 # ---------------------------------------------------------
@@ -268,63 +255,25 @@ get_info_by_code() {
 # ---------------------------------------------------------
 action=""
 output_format="icon"
-err_act="Only one action can be chosen: -n -F -c -m"
-err_out="Only one output can be chosen: -t -g -i"
 
 while getopts ":nFmtgich" opt; do
     case ${opt} in
-        h) 
-            show_help 
-            ;;
-        n) 
-            if [ -n "$action" ]; then 
-                die "$err_act" 
-            fi
-            action="notify" 
-            ;;
-        F) 
-            if [ -n "$action" ]; then 
-                die "$err_act" 
-            fi
-            action="forecast" 
-            ;;
-        c) 
-            if [ -n "$action" ]; then 
-                die "$err_act" 
-            fi
-            action="config" 
-            ;;
-        m) 
-            if [ -n "$action" ]; then 
-                die "$err_act" 
-            fi
-            action="menu" 
-            ;;
-        t) 
-            if [ "$output_format" != "icon" ]; then 
-                die "$err_out" 
-            fi
-            output_format="text" 
-            ;;
-        g) 
-            if [ "$output_format" != "icon" ]; then 
-                die "$err_out" 
-            fi
-            output_format="glyph" 
-            ;;
-        i) 
-            output_format="icon" 
-            ;;
-        \?|*) 
-            die "Argument error. Use -h for help." 
-            ;;
+        h) show_help ;;
+        n) action="notify" ;;
+        F) action="forecast" ;;
+        c) action="config" ;;
+        m) action="menu" ;;
+        t) output_format="text" ;;
+        g) output_format="glyph" ;;
+        i) output_format="icon" ;;
+        *) die "Argument error. Use -h for help." ;;
     esac
 done
 
-if [ -f "$config_file" ]; then 
+if [ -f "$config_file" ]; then
     . "$config_file"
 else
-    if [ "$action" != "config" ] && [ "$action" != "menu" ] && [ "$action" != "help" ]; then
+    if [ "$action" != "config" ] && [ "$action" != "menu" ]; then
         do_config
         if [ -f "$config_file" ]; then
             . "$config_file"
@@ -334,11 +283,25 @@ else
     fi
 fi
 
+# Load UI Labels from JSON
+if [ -f "$translation_file" ]; then
+    lbl_date=$(jq -r ".labels.date.$sys_lang // .labels.date.en" "$translation_file")
+    lbl_stat=$(jq -r ".labels.status.$sys_lang // .labels.status.en" "$translation_file")
+    lbl_temp=$(jq -r ".labels.temp.$sys_lang // .labels.temp.en" "$translation_file")
+    lbl_hum=$(jq -r ".labels.humidity.$sys_lang // .labels.humidity.en" "$translation_file")
+    lbl_wind=$(jq -r ".labels.wind.$sys_lang // .labels.wind.en" "$translation_file")
+    lbl_prec=$(jq -r ".labels.rain_prob.$sys_lang // .labels.rain_prob.en" "$translation_file")
+    lbl_title=$(jq -r ".labels.forecast_title.$sys_lang // .labels.forecast_title.en" "$translation_file")
+else
+    lbl_date="Date"; lbl_stat="Status"; lbl_temp="Temp"; lbl_hum="Humidity"
+    lbl_wind="Wind"; lbl_prec="Rain Prob."; lbl_title="Weather Forecast"
+fi
+
 case "$action" in
-    config) 
-        do_config 
+    config)
+        do_config
         ;;
-    menu) 
+    menu)
         printf "Show Forecast,%s -F\nNotification Info,%s -n\nSettings,%s -c\n" "$scriptname" "$scriptname" "$scriptname" | createjgmenu
         ;;
     forecast|notify|"")
@@ -346,8 +309,9 @@ case "$action" in
             die "Incomplete configuration. Run pmweather -c first." "-y"
         fi
 
-16
-        if [ -z "$weather_data" ]; then 
+        weather_data=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day,precipitation&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&temperature_unit=${temp_unit}&timezone=auto&forecast_days=3")
+
+        if [ -z "$weather_data" ]; then
             die "Error: Unable to connect to weather API." "-y"
         fi
 
@@ -360,28 +324,28 @@ case "$action" in
                     f_min=$(printf '%s' "$weather_data" | jq -r ".daily.temperature_2m_min[$i]")
                     f_code=$(printf '%s' "$weather_data" | jq -r ".daily.weather_code[$i]")
                     f_prec=$(printf '%s' "$weather_data" | jq -r ".daily.precipitation_probability_max[$i]")
-                    
+
                     f_info=$(get_info_by_code "$f_code" "1")
                     f_icon_file=$(printf '%s' "$f_info" | cut -d'|' -f1)
                     f_desc=$(printf '%s' "$f_info" | cut -d'|' -f3)
-                    
+
                     sub_dir=""
                     if [ "$icon_type" = "monochrome" ]; then
                         sub_dir="dark/"
                     fi
 
-                    printf '%s/%s%s\n' "$iconpath" "$sub_dir" "$f_icon_file"
+                    full_icon_path="${iconpath}/${sub_dir}${f_icon_file}"
+
+                    printf '%s\n' "$full_icon_path"
                     printf '%s\n' "$f_date"
                     printf '%s\n' "$f_desc"
                     printf '%s / %s°\n' "$f_min" "$f_max"
                     printf '%s%%\n' "$f_prec"
-                    
                     i=$((i + 1))
                 done
-            ) | yad --list \
-                --title="Weather Forecast: ${location}" \
+            ) | yad --list --title="${lbl_title}: ${location}" \
                 --width=650 --height=400 --borders=15 \
-                --column="":IMG --column="Date" --column="Status" --column="Temp. Min/Max" --column="Rain Prob." \
+                --column="":IMG --column="${lbl_date}" --column="${lbl_stat}" --column="${lbl_temp} Min/Max" --column="${lbl_prec}" \
                 --no-selection --button="Close:0"
         else
             curr_code=$(printf '%s' "$weather_data" | jq -r '.current.weather_code')
@@ -396,34 +360,19 @@ case "$action" in
                 curr_temp=$(printf '%s' "$weather_data" | jq -r '.current.temperature_2m')
                 curr_hum=$(printf '%s' "$weather_data" | jq -r '.current.relative_humidity_2m')
                 curr_wind=$(printf '%s' "$weather_data" | jq -r '.current.wind_speed_10m')
-                curr_prec=$(printf '%s' "$weather_data" | jq -r '.current.precipitation')
-                
-                if [ "$sys_lang" = "it" ]; then
-                    lbl_hum="Umidità"
-                    lbl_wind="Vento"
-                    lbl_prec="Pioggia"
-                else
-                    lbl_hum="Humidity"
-                    lbl_wind="Wind"
-                    lbl_prec="Rain"
-                fi
 
                 dunstify -i "${iconpath}/${icon_file}" "Weather: ${location}" \
-                    "Temp: ${curr_temp}° (${desc})\n${lbl_hum}: ${curr_hum}%\n${lbl_wind}: ${curr_wind} km/h\n${lbl_prec}: ${curr_prec} mm"
+                    "${lbl_temp}: ${curr_temp}° (${desc})\n${lbl_hum}: ${curr_hum}%\n${lbl_wind}: ${curr_wind} km/h"
             else
                 case "$output_format" in
-                    text)  
-                        printf '%s\n' "$desc" 
-                        ;;
-                    glyph) 
-                        printf '%s\n' "$glyph" 
-                        ;;
-                    icon)  
+                    text)  printf '%s\n' "$desc" ;;
+                    glyph) printf '%s\n' "$glyph" ;;
+                    icon)
                         sub=""
                         if [ "$icon_type" = "monochrome" ]; then
                             sub="dark/"
                         fi
-                        printf '%s/%s%s\n' "$iconpath" "$sub" "$icon_file" 
+                        printf '%s/%s%s\n' "$iconpath" "$sub" "$icon_file"
                         ;;
                 esac
             fi
