@@ -363,6 +363,8 @@ do_select_card() {
     ' /proc/asound/cards)
 
     if [ -z "$cards" ]; then
+        # Rimuoviamo il lock prima di chiamare la GUI di errore
+        rm -f "$gui_lock"
         die "No ALSA sound cards detected." -g
     fi
 
