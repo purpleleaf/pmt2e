@@ -1,208 +1,387 @@
 #!/bin/sh
 # ==============================================================================
 # Script Name  : pmbattery
-# Description  : PMT2e Battery Agent - Lightweight monitor with flood protection
+# Description  : PMT2e Battery Agent - Strict Verticality & No Oneliners
 # Author       : Max Franco <purpleleaf at ganoia.eu>
 # License      : GPL-3.0
 # Dependencies : acpi, yad, dunstify, jgmenu, alsa-utils
-# Optional     : Nerd font of your choice for font glyph output
 # ==============================================================================
 
 iconpath="/usr/share/pmt2e/icons"
 scriptname=$(basename "$0")
-lock_file="/tmp/${scriptname}.lock"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
+config_file="$config_dir/pmbattery.conf"
+gui_lock="/tmp/${scriptname}_gui.lock"
 
 # ---------------------------------------------------------
-# Error handling & Utilities
+# Utilities & Requirements Check
 # ---------------------------------------------------------
-exists() { command -v "$1" >/dev/null 2>&1; }
+exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+show_help() {
+    printf "Usage: %s [OPTION]\n\n" "$scriptname"
+    printf "PMT2e Battery Agent - A lightweight battery monitor for panels.\n"
+    printf "Defaults to '-t' (text output) if no options are provided.\n\n"
+    printf "ACTIONS (Choose exactly one):\n"
+    printf "  -n        Send desktop notification\n"
+    printf "  -d        Show battery details dialog\n"
+    printf "  -c        Open the configuration GUI\n"
+    printf "  -m        Show interactive jgmenu\n"
+    printf "  -h        Show this help message and exit\n\n"
+    printf "OUTPUT FORMATS (Optional):\n"
+    printf "  -t        Print volume text (e.g., 50%%) [DEFAULT]\n"
+    printf "  -T        Print percentage with time remaining\n"
+    printf "  -f        Print the battery Nerd Font glyph\n"
+    printf "  -i        Print the battery icon name (GTK)\n"
+    exit 0
+}
 
 show_dialog() {
-    [ -f "$lock_file" ] && return
-    touch "$lock_file"
+    if [ -f "$gui_lock" ]; then
+        find "/tmp" -name "$(basename "$gui_lock")" -mmin +1 -delete
+        if [ -f "$gui_lock" ]; then
+            return
+        fi
+    fi
+
+    touch "$gui_lock"
+
     yad --title="$2" \
         --text="$1" \
         --image="$3" \
         --window-icon="$3" \
         --borders=15 \
-        --button="Close:0"
-    rm -f "$lock_file"
+        --button="Close:0" \
+        --center
+
+    rm -f "$gui_lock"
 }
 
 die() {
-    if [ "$1" = "-y" ]; then
-        shift
-        if exists yad; then 
-            show_dialog "$*" "Battery Error" "dialog-error"
-        else 
-            printf '%s\n' "$*" 1>&2
+    msg="$1"
+    if [ "$2" = "-g" ]; then
+        if exists yad; then
+            show_dialog "$msg" "Battery Error" "dialog-error"
+        else
+            printf '%s\n' "$msg" 1>&2
         fi
     else
-        printf '%s\n' "$*" 1>&2
+        printf '%s\n' "$msg" 1>&2
     fi
     exit 1
 }
 
-# --- Default Configuration ---
+for req in acpi yad dunstify jgmenu; do
+    if ! exists "$req"; then
+        die "Error: dependency '$req' is not installed."
+    fi
+done
+
+# ---------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------
 crit_level=5
 notify_time_normal=2500
 notify_time_crit=5000
 crit_sound="/usr/share/sounds/freedesktop/stereo/bell.oga"
 
-# --- Load User Configuration Safely ---
-config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
-config_file="$config_dir/pmbattery.conf"
-
 if [ -f "$config_file" ] && [ -r "$config_file" ]; then
     while IFS='=' read -r key val || [ -n "$key" ]; do
-        val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
+        val="${val%\"}"
+        val="${val#\"}"
+        val="${val%\'}"
+        val="${val#\'}"
         case "$key" in
-            crit_level)         crit_level="$val" ;;
-            notify_time_normal) notify_time_normal="$val" ;;
-            notify_time_crit)   notify_time_crit="$val" ;;
-            crit_sound)         crit_sound="$val" ;;
+            crit_level)
+                crit_level="$val"
+                ;;
+            notify_time_normal)
+                notify_time_normal="$val"
+                ;;
+            notify_time_crit)
+                notify_time_crit="$val"
+                ;;
+            crit_sound)
+                crit_sound="$val"
+                ;;
         esac
     done < "$config_file"
 fi
 
 # ---------------------------------------------------------
-# Data Extraction Functions
+# Data Logic
 # ---------------------------------------------------------
 get_battery_stats() {
     bat=$(acpi -b 2>/dev/null)
-    [ -z "$bat" ] && return 1
-
-    state=$(printf '%s\n' "$bat" | tr -s ' ' | cut -d ' ' -f 3)
-
-    if [ "$state" = "Not" ]; then
-        level_raw=$(printf '%s\n' "$bat" | tr -s ' ' | cut -d ' ' -f 5)
-        state_clean="Not Charging"
-    else
-        level_raw=$(printf '%s\n' "$bat" | tr -s ' ' | cut -d ' ' -f 4)
-        state_clean=${state%,}
+    if [ -z "$bat" ]; then
+        return 1
     fi
 
-    # POSIX safe cleaning: remove percentage and commas (fixes 100% bug)
-    level=$(printf '%s\n' "$level_raw" | tr -d '%, ')
-    [ -z "$state_clean" ] && state_clean="Unknown"
-    time_info=$(printf '%s\n' "$bat" | cut -d ',' -f 3 | sed 's/^ //')
+    state_raw=$(printf '%s' "$bat" | tr -s ' ' | cut -d ' ' -f 3)
+    if [ "$state_raw" = "Not" ]; then
+        level_raw=$(printf '%s' "$bat" | tr -s ' ' | cut -d ' ' -f 5)
+        state_clean="Not Charging"
+    else
+        level_raw=$(printf '%s' "$bat" | tr -s ' ' | cut -d ' ' -f 4)
+        state_clean=$(printf '%s' "$state_raw" | tr -d ',')
+    fi
+
+    level=$(printf '%s' "$level_raw" | tr -d '%, ')
+    time_info=$(printf '%s' "$bat" | cut -d ',' -f 3 | sed 's/^ //')
+    return 0
 }
 
-get_power_draw() {
-    power_mw=0; power_draw="Unknown"; bat_dir=""
-    for d in /sys/class/power_supply/BAT*; do [ -d "$d" ] && bat_dir="$d" && break; done
+# ---------------------------------------------------------
+# UI & Output Handlers
+# ---------------------------------------------------------
+do_notify() {
+    if [ "$bat_err" = "1" ]; then
+        dunstify -u critical "Battery Error" "No battery detected."
+    elif [ "$level" -le "$crit_level" ]; then
+        dunstify -t "$notify_time_crit" -u critical "Battery Low" "Level: ${level}%\nStatus: $state_clean"
+        if [ -f "$crit_sound" ]; then
+            if exists aplay; then
+                aplay -q "$crit_sound" &
+            fi
+        fi
+    else
+        dunstify -t "$notify_time_normal" -u normal "Battery Status" "Level: ${level}%\nStatus: $state_clean"
+    fi
+}
+
+do_output() {
+    if [ "$bat_err" = "1" ]; then
+        echo "N/A"
+        return
+    fi
+
+    case "$1" in
+        text)
+            echo "${level}%"
+            ;;
+        text_ext)
+            if [ -n "$time_info" ]; then
+                echo "${level}% ($time_info)"
+            else
+                echo "${level}%"
+            fi
+            ;;
+        glyph)
+            if [ "$state_clean" = "Charging" ]; then
+                echo "󰂄"
+            else
+                if [ "$level" -ge 90 ]; then
+                    echo "󰁹"
+                elif [ "$level" -ge 70 ]; then
+                    echo "󰂁"
+                elif [ "$level" -ge 40 ]; then
+                    echo "󰁾"
+                elif [ "$level" -ge 10 ]; then
+                    echo "󰁻"
+                else
+                    echo "󰂎"
+                fi
+            fi
+            ;;
+        icon)
+            if [ "$state_clean" = "Charging" ]; then
+                echo "battery-good-charging-symbolic"
+            elif [ "$level" -le "$crit_level" ]; then
+                echo "battery-empty-symbolic"
+            else
+                echo "battery-good-symbolic"
+            fi
+            ;;
+    esac
+}
+
+do_details() {
+    power_mw=0
+    power_draw="Unknown"
+    bat_dir=""
+
+    for d in /sys/class/power_supply/BAT*; do
+        if [ -d "$d" ]; then
+            bat_dir="$d"
+            break
+        fi
+    done
 
     if [ -n "$bat_dir" ]; then
         if [ -f "$bat_dir/power_now" ]; then
             p_raw=$(cat "$bat_dir/power_now")
-            [ "$p_raw" -gt 100000 ] && power_mw=$((p_raw / 1000)) || power_mw=$p_raw
+            if [ "$p_raw" -gt 1000000 ]; then
+                power_mw=$((p_raw / 1000))
+            else
+                power_mw=$p_raw
+            fi
         elif [ -f "$bat_dir/current_now" ]; then
             c_raw=$(cat "$bat_dir/current_now")
-            [ -f "$bat_dir/voltage_now" ] && v_raw=$(cat "$bat_dir/voltage_now") || v_raw=$(cat "$bat_dir/voltage_min_design")
-            if [ "$c_raw" -gt 0 ] && [ "$v_raw" -gt 0 ]; then
-                [ "$v_raw" -gt 100000 ] && { c_ma=$((c_raw / 1000)); v_mv=$((v_raw / 1000)); } || { c_ma=$c_raw; v_mv=$v_raw; }
-                power_mw=$((c_ma * v_mv / 1000))
+            if [ -f "$bat_dir/voltage_now" ]; then
+                v_raw=$(cat "$bat_dir/voltage_now")
+            else
+                v_raw=$(cat "$bat_dir/voltage_min_design")
+            fi
+
+            if [ "$c_raw" -gt 0 ]; then
+                if [ "$v_raw" -gt 0 ]; then
+                    c_ma=$((c_raw / 1000))
+                    v_mv=$((v_raw / 1000))
+                    power_mw=$(( (c_ma * v_mv) / 1000 ))
+                fi
             fi
         fi
     fi
 
     if [ "$power_mw" -gt 0 ]; then
-        w=$((power_mw / 1000)); d1=$(( (power_mw % 1000) / 100 )); d2=$(( (power_mw % 100) / 10 ))
-        [ "$w" -eq 0 ] && [ "$d1" -eq 0 ] && power_draw="0.0${d2} W" || power_draw="${w}.${d1} W"
+        w_val=$((power_mw / 1000))
+        d_val=$(( (power_mw % 1000) / 100 ))
+        power_draw="${w_val}.${d_val} W"
     fi
-}
 
-# ---------------------------------------------------------
-# Action Handlers
-# ---------------------------------------------------------
-do_config() {
-    mkdir -p "$config_dir"
-    # Logic: Variables like $crit_level are outside single quotes for expansion, 
-    # while the YAD field definition string is inside single quotes to protect '!'.
-    new_configs=$(yad --title="PM Battery configuration" --window-icon="battery" --borders=15 --form \
-        --columns=2 \
-        --field='Notification Threshold (%):NUM' "$crit_level"'!1..100!1!0' \
-        --field='Normal Notify (ms):NUM' "$notify_time_normal"'!500..10000!100!0' \
-        --field='Critical Notify (ms):NUM' "$notify_time_crit"'!500..10000!100!0' \
-        --field='Alarm Sound:FL' "$crit_sound")
-
-    if [ -n "$new_configs" ]; then
-        IFS='|' read -r c_lvl t_norm t_crit s_path _ <<EOF
-$new_configs
-EOF
-        sed -i '/^crit_level=/d; /^notify_time_normal=/d; /^notify_time_crit=/d; /^crit_sound=/d' "$config_file"
-        { echo "crit_level=$c_lvl"; echo "notify_time_normal=$t_norm"; echo "notify_time_crit=$t_crit"; echo "crit_sound='$s_path'"; } >> "$config_file"
-    fi
-}
-
-do_details() {
-    get_power_draw
-    bat_dir=""
-    for d in /sys/class/power_supply/BAT*; do [ -d "$d" ] && bat_dir="$d" && break; done
-    health="Unknown"; cycles="Unknown"
+    health="Unknown"
+    cycles="Unknown"
     if [ -n "$bat_dir" ]; then
-        [ -f "$bat_dir/energy_full" ] && { f=$(cat "$bat_dir/energy_full"); d=$(cat "$bat_dir/energy_full_design"); }
-        [ -f "$bat_dir/charge_full" ] && { f=$(cat "$bat_dir/charge_full"); d=$(cat "$bat_dir/charge_full_design"); }
-        [ -n "$f" ] && [ -n "$d" ] && [ "$d" -gt 0 ] && health=$(( (f * 100) / d ))"%"
-        [ -f "$bat_dir/cycle_count" ] && cycles=$(cat "$bat_dir/cycle_count")
+        f_cap=""
+        d_cap=""
+        if [ -f "$bat_dir/energy_full" ]; then
+            f_cap=$(cat "$bat_dir/energy_full")
+            d_cap=$(cat "$bat_dir/energy_full_design")
+        elif [ -f "$bat_dir/charge_full" ]; then
+            f_cap=$(cat "$bat_dir/charge_full")
+            d_cap=$(cat "$bat_dir/charge_full_design")
+        fi
+
+        if [ -n "$f_cap" ]; then
+            if [ -n "$d_cap" ]; then
+                if [ "$d_cap" -gt 0 ]; then
+                    health=$(( (f_cap * 100) / d_cap ))"%"
+                fi
+            fi
+        fi
+
+        if [ -f "$bat_dir/cycle_count" ]; then
+            cycles=$(cat "$bat_dir/cycle_count")
+        fi
     fi
+
     info="<b>Status</b>\nState: $state_clean\nLevel: ${level}%\nDraw: $power_draw\nTime: $time_info\n\n<b>Health</b>\nCapacity: $health\nCycles: $cycles"
+
     show_dialog "$info" "Battery Details" "battery"
 }
 
+do_config() {
+    if [ -f "$gui_lock" ]; then
+        find "/tmp" -name "$(basename "$gui_lock")" -mmin +1 -delete
+        if [ -f "$gui_lock" ]; then
+            return
+        fi
+    fi
+    touch "$gui_lock"
+
+    new_configs=$(yad --title="Battery Settings" \
+        --window-icon="preferences-system" \
+        --form --columns=2 --borders=15 \
+        --field='Notification Threshold (%):NUM' "$crit_level"'!1..100!1!0' \
+        --field='Normal Notify (ms):NUM' "$notify_time_normal"'!500..10000!100!0' \
+        --field='Critical Notify (ms):NUM' "$notify_time_crit"'!500..10000!100!0' \
+        --field='Alarm Sound:FL' "$crit_sound" \
+        --field='!gtk-help!Threshold':BTN "yad --info --text='Battery % to trigger critical alert.' --borders=15 --center" \
+        --field='!gtk-help!Normal Notify':BTN "yad --info --text='Duration of standard status popup (ms).' --borders=15 --center" \
+        --field='!gtk-help!Critical Notify':BTN "yad --info --text='Duration of low battery warning (ms).' --borders=15 --center" \
+        --field='!gtk-help!Alarm Sound':BTN "yad --info --text='Audio file played at critical level.' --borders=15 --center" \
+        --button="Save:0" --button="Cancel:1")
+
+    if [ $? -eq 0 ]; then
+        if [ -n "$new_configs" ]; then
+            c_lvl=$(printf '%s' "$new_configs" | cut -d'|' -f1)
+            t_norm=$(printf '%s' "$new_configs" | cut -d'|' -f2)
+            t_crit=$(printf '%s' "$new_configs" | cut -d'|' -f3)
+            s_path=$(printf '%s' "$new_configs" | cut -d'|' -f4)
+
+            mkdir -p "$config_dir"
+            printf "crit_level=%s\nnotify_time_normal=%s\nnotify_time_crit=%s\ncrit_sound='%s'\n" \
+                "$c_lvl" "$t_norm" "$t_crit" "$s_path" > "$config_file"
+
+            yad --info --text="Configuration saved successfully." --borders=15 --center
+        fi
+    fi
+    rm -f "$gui_lock"
+}
+
 # ---------------------------------------------------------
-# Execution Logic
+# Main Execution Logic
 # ---------------------------------------------------------
 action=""
-while getopts ":nhmtTfidc" opt; do
+output_format="text"
+err_act="Only one action can be chosen: -n -d -c -m"
+err_out="Only one output can be chosen: -t -T -f -i"
+
+while getopts ":ndcmthTfi" opt; do
     case ${opt} in
-        n) action="notification" ;; t) action="text" ;; T) action="text_ext" ;;
-        f) action="glyph" ;; i) action="icon" ;; m) action="menu" ;;
-        d) action="details" ;; c) action="config" ;;
-        h) printf "Usage: %s [-n|-t|-T|-f|-i|-m|-d|-c]\n" "$scriptname"; exit 0 ;;
+        n)
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="notify"
+            ;;
+        d)
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="details"
+            ;;
+        c)
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="config"
+            ;;
+        m)
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="menu"
+            ;;
+        t)
+            if [ "$output_format" != "text" ]; then die "$err_out"; fi
+            output_format="text"
+            ;;
+        T)
+            if [ "$output_format" != "text" ]; then die "$err_out"; fi
+            output_format="text_ext"
+            ;;
+        f)
+            if [ "$output_format" != "text" ]; then die "$err_out"; fi
+            output_format="glyph"
+            ;;
+        i)
+            if [ "$output_format" != "text" ]; then die "$err_out"; fi
+            output_format="icon"
+            ;;
+        h)
+            show_help
+            ;;
+        \?|*)
+            die "Invalid option. Use -h for help."
+            ;;
     esac
 done
 
-[ -z "$action" ] && die "Missing option. Use -h for help."
+get_battery_stats || bat_err=1
 
-# Run handlers
 case "$action" in
-    config)  do_config ;;
-    menu)    printf "Battery Details,%s -d\nConfiguration,%s -c\n" "$scriptname" "$scriptname" | createjgmenu ;;
-    
+    config)
+        do_config
+        ;;
+    details)
+        if [ "$bat_err" = "1" ]; then
+            die "Battery hardware not found." -g
+        else
+            do_details
+        fi
+        ;;
+    menu)
+        printf "Details,%s -d\nConfig,%s -c\n" "$scriptname" "$scriptname" | createjgmenu
+        ;;
+    notify)
+        do_notify
+        ;;
     *)
-        # Common data fetch for monitoring actions
-        get_battery_stats || bat_missing=1
-        
-        case "$action" in
-            details) [ "$bat_missing" = "1" ] && die -y "Battery not found." || do_details ;;
-            
-            notification)
-                if [ "$bat_missing" = "1" ]; then
-                     dunstify -u critical "Battery Error" "No battery detected."
-                elif [ "$level" -le "$crit_level" ]; then
-                    dunstify -t "$notify_time_crit" -u critical "Battery Low" "Level: ${level}%\nStatus: $state_clean"
-                    [ -f "$crit_sound" ] && exists aplay && aplay -q "$crit_sound" &
-                else
-                    dunstify -t "$notify_time_normal" -u normal "Battery Status" "Level: ${level}%\nStatus: $state_clean"
-                fi ;;
-                
-            text) [ "$bat_missing" = "1" ] && echo "N/A" || echo "${level}%" ;;
-            
-            text_ext) [ "$bat_missing" = "1" ] && echo "N/A" || { [ -n "$time_info" ] && echo "${level}% ($time_info)" || echo "${level}%"; } ;;
-            
-            glyph)
-                if [ "$bat_missing" = "1" ]; then echo "󰂑"
-                elif [ "$state_clean" = "Charging" ]; then echo "󰂄"
-                else
-                    [ "$level" -ge 90 ] && echo "󰁹" || ([ "$level" -ge 70 ] && echo "󰂁" || ([ "$level" -ge 40 ] && echo "󰁾" || ([ "$level" -ge 10 ] && echo "󰁻" || echo "󰂎")))
-                fi ;;
-                
-            icon)
-                if [ "$bat_missing" = "1" ]; then echo "battery-missing-symbolic"
-                elif [ "$state_clean" = "Charging" ]; then echo "battery-good-charging-symbolic"
-                elif [ "$level" -le "$crit_level" ]; then echo "battery-empty-symbolic"
-                else echo "battery-good-symbolic"; fi ;;
-        esac
+        do_output "$output_format"
         ;;
 esac
