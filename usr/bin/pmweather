@@ -15,7 +15,7 @@ iconpath="/usr/share/pmt2e/wheather_icons"
 scriptname=$(basename "$0")
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pmt2e"
 config_file="$config_dir/pmweather.conf"
-lock_file="/tmp/${scriptname}.lock"
+gui_lock="/tmp/${scriptname}_gui.lock"
 
 # ---------------------------------------------------------
 # Utilities & Requirements Check
@@ -24,14 +24,44 @@ exists() {
     command -v "$1" >/dev/null 2>&1 
 }
 
+show_dialog() {
+    if [ -f "$gui_lock" ]; then
+        find "/tmp" -name "$(basename "$gui_lock")" -mmin +1 -delete
+        if [ -f "$gui_lock" ]; then
+            return
+        fi
+    fi
+
+    touch "$gui_lock"
+
+    yad --title="$2" \
+        --text="$1" \
+        --image="$3" \
+        --window-icon="$3" \
+        --borders=15 \
+        --button="Close:0" \
+        --center
+
+    rm -f "$gui_lock"
+}
+
 die() {
-    printf '%s\n' "$*" 1>&2
+    msg="$1"
+    if [ "$2" = "-y" ]; then
+        if exists yad; then
+            show_dialog "$msg" "Weather Error" "dialog-error"
+        else
+            printf '%s\n' "$msg" 1>&2
+        fi
+    else
+        printf '%s\n' "$msg" 1>&2
+    fi
     exit 1
 }
 
 for req in curl jq yad dunstify jgmenu pkill; do
     if ! exists "$req"; then
-        die "Error: dependency '$req' is not installed."
+        die "Error: dependency '$req' is not installed." "-y"
     fi
 done
 
@@ -55,7 +85,7 @@ show_help() {
     printf "  -F    Show 3-day forecast in a rich YAD GUI table.\n"
     printf "  -c    Open the configuration GUI to set location and units.\n"
     printf "  -m    Show the jgmenu context menu.\n"
-    printf "  -h    Show this extensive help message and exit.\n\n"
+    printf "  -h    Show this help message and exit.\n\n"
     printf "OUTPUT FORMATS (Default is -i):\n"
     printf "  -t    Print the weather description as plain text.\n"
     printf "  -g    Print the Nerd Font weather glyph.\n"
@@ -102,11 +132,6 @@ search_location() {
 }
 
 do_config() {
-    if [ -f "$lock_file" ]; then 
-        return
-    fi
-    touch "$lock_file"
-
     if [ -f "$config_file" ]; then 
         . "$config_file"
     fi
@@ -163,7 +188,6 @@ EOF
             break
         fi
     done
-    rm -f "$lock_file"
 }
 
 # ---------------------------------------------------------
@@ -253,27 +277,39 @@ while getopts ":nFmtgich" opt; do
             show_help 
             ;;
         n) 
-            if [ -n "$action" ]; then die "$err_act"; fi
+            if [ -n "$action" ]; then 
+                die "$err_act" 
+            fi
             action="notify" 
             ;;
         F) 
-            if [ -n "$action" ]; then die "$err_act"; fi
+            if [ -n "$action" ]; then 
+                die "$err_act" 
+            fi
             action="forecast" 
             ;;
         c) 
-            if [ -n "$action" ]; then die "$err_act"; fi
+            if [ -n "$action" ]; then 
+                die "$err_act" 
+            fi
             action="config" 
             ;;
         m) 
-            if [ -n "$action" ]; then die "$err_act"; fi
+            if [ -n "$action" ]; then 
+                die "$err_act" 
+            fi
             action="menu" 
             ;;
         t) 
-            if [ "$output_format" != "icon" ]; then die "$err_out"; fi
+            if [ "$output_format" != "icon" ]; then 
+                die "$err_out" 
+            fi
             output_format="text" 
             ;;
         g) 
-            if [ "$output_format" != "icon" ]; then die "$err_out"; fi
+            if [ "$output_format" != "icon" ]; then 
+                die "$err_out" 
+            fi
             output_format="glyph" 
             ;;
         i) 
@@ -307,13 +343,12 @@ case "$action" in
         ;;
     forecast|notify|"")
         if [ -z "$latitude" ]; then
-            die "Incomplete configuration. Run pmweather -c first."
+            die "Incomplete configuration. Run pmweather -c first." "-y"
         fi
 
-        weather_data=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day,precipitation&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset&temperature_unit=${temp_unit}&timezone=auto&forecast_days=3")
-
+16
         if [ -z "$weather_data" ]; then 
-            die "Error: Unable to connect to weather API."
+            die "Error: Unable to connect to weather API." "-y"
         fi
 
         if [ "$action" = "forecast" ]; then
