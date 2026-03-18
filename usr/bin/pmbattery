@@ -61,7 +61,7 @@ show_dialog() {
 
 die() {
     msg="$1"
-    if [ "$2" = "-g" ]; then
+    if [ "$2" = "-y" ]; then
         if exists yad; then
             show_dialog "$msg" "Battery Error" "dialog-error"
         else
@@ -370,7 +370,7 @@ case "$action" in
         ;;
     details)
         if [ "$bat_err" = "1" ]; then
-            die "Battery hardware not found." -g
+            die "Battery hardware not found." "-y"
         else
             do_details
         fi
