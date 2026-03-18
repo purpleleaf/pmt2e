@@ -10,7 +10,7 @@
 
 iconpath="/usr/share/pmt2e/icons"
 scriptname=$(basename "$0")
-lock_file="/tmp/${scriptname}.lock"
+gui_lock="/tmp/${scriptname}_gui.lock"
 RC_XML="$HOME/.config/openbox/rc.xml"
 
 # ---------------------------------------------------------
@@ -21,29 +21,35 @@ exists() {
 }
 
 show_dialog() {
-    if [ -f "$lock_file" ]; then
-        return
+    if [ -f "$gui_lock" ]; then
+        find "/tmp" -name "$(basename "$gui_lock")" -mmin +1 -delete
+        if [ -f "$gui_lock" ]; then
+            return
+        fi
     fi
-    touch "$lock_file"
+
+    touch "$gui_lock"
+
     yad --title="$2" \
         --text="$1" \
         --image="$3" \
         --window-icon="$3" \
         --borders=15 \
         --button="Close:0"
-    rm -f "$lock_file"
+
+    rm -f "$gui_lock"
 }
 
 die() {
-    if [ "$1" = "-y" ]; then
-        shift
+    msg="$1"
+    if [ "$2" = "-y" ]; then
         if exists yad; then 
-            show_dialog "$*" "Workspace Error" "dialog-error"
+            show_dialog "$msg" "Workspace Error" "dialog-error"
         else 
-            printf '%s\n' "$*" 1>&2
+            printf '%s\n' "$msg" 1>&2
         fi
     else
-        printf '%s\n' "$*" 1>&2
+        printf '%s\n' "$msg" 1>&2
     fi
     exit 1
 }
@@ -110,7 +116,7 @@ set_total_desktops() {
 
 do_total_gui() {
     if ! exists yad; then
-        die -y "yad is required for this action."
+        die "yad is required for this action." "-y"
     fi
     
     get_ws_info
