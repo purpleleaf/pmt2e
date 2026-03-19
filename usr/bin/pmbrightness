@@ -12,7 +12,61 @@ scriptname=$(basename "$0")
 gui_lock="/tmp/${scriptname}_gui.lock"
 
 # ---------------------------------------------------------
-# Utilities & Requirements Check
+# Execution & Argument Parsing (Moved to top for Poll Protection)
+# ---------------------------------------------------------
+action=""
+output="text"
+input_val=""
+
+err_act="Only one action can be chosen."
+err_out="Only one output can be chosen."
+
+while getopts ":huds:mgift" opt; do
+    case "${opt}" in
+        h) 
+            show_help 
+            ;;
+        u) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="up" 
+            ;;
+        d) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="down" 
+            ;;
+        s) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="set"
+            input_val="$OPTARG" 
+            ;;
+        g) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="gui" 
+            ;;
+        m) 
+            if [ -n "$action" ]; then die "$err_act"; fi
+            action="menu" 
+            ;;
+        t) 
+            if [ "$output" != "text" ]; then die "$err_out"; fi
+            output="text" 
+            ;;
+        f) 
+            if [ "$output" != "text" ]; then die "$err_out"; fi
+            output="glyph" 
+            ;;
+        i) 
+            if [ "$output" != "text" ]; then die "$err_out"; fi
+            output="icon" 
+            ;;
+        \?|*) 
+            die "Invalid option. Use -h for help." 
+            ;;
+    esac
+done
+
+# ---------------------------------------------------------
+# Utilities & Output Fallbacks
 # ---------------------------------------------------------
 exists() { 
     command -v "$1" >/dev/null 2>&1 
@@ -33,6 +87,14 @@ show_help() {
     printf "  -f        Print Nerd Font glyph\n"
     printf "  -i        Print path to brightness SVG icon\n"
     exit 0
+}
+
+print_fallback() {
+    case "$output" in
+        text)  printf 'Bri: N/A\n' ;;
+        glyph) printf '󰃠 <span color="red">󱈸</span>\n' ;;
+        icon)  printf '%s/bri-error.svg\n' "$iconpath" ;;
+    esac
 }
 
 show_dialog() {
@@ -58,6 +120,13 @@ show_dialog() {
 
 die() {
     msg="$1"
+    
+    # Poll Protection: If polling (no action), fail silently to protect the panel
+    if [ -z "$action" ]; then
+        print_fallback
+        exit 1
+    fi
+
     if [ "$2" = "-y" ]; then
         if exists yad; then 
             show_dialog "$msg" "Brightness Error" "dialog-error"
@@ -70,11 +139,17 @@ die() {
     exit 1
 }
 
-for req in yad jgmenu; do
-    if ! exists "$req"; then
-        die "Error: dependency '$req' is not installed."
-    fi
-done
+# ---------------------------------------------------------
+# Selective Requirements Check
+# ---------------------------------------------------------
+# Only check for GUI/Menu tools if an interactive action is requested.
+if [ -n "$action" ]; then
+    for req in yad jgmenu; do
+        if ! exists "$req"; then
+            die "Error: dependency '$req' is not installed." "-y"
+        fi
+    done
+fi
 
 # ---------------------------------------------------------
 # Backlight Backend Detection & Wrappers
@@ -169,62 +244,11 @@ send_notification() {
     dunstify -t 1000 -h string:x-dunst-stack-tag:brightness -i "$icon" -h int:value:"$cur" "Brightness: ${cur}%"
 }
 
-# ---------------------------------------------------------
-# Execution & Argument Parsing
-# ---------------------------------------------------------
-action=""
-output="text"
-input_val=""
-
-err_act="Only one action can be chosen."
-err_out="Only one output can be chosen."
-
-while getopts ":huds:mgift" opt; do
-    case "${opt}" in
-        h) 
-            show_help 
-            ;;
-        u) 
-            if [ -n "$action" ]; then die "$err_act"; fi
-            action="up" 
-            ;;
-        d) 
-            if [ -n "$action" ]; then die "$err_act"; fi
-            action="down" 
-            ;;
-        s) 
-            if [ -n "$action" ]; then die "$err_act"; fi
-            action="set"
-            input_val="$OPTARG" 
-            ;;
-        g) 
-            if [ -n "$action" ]; then die "$err_act"; fi
-            action="gui" 
-            ;;
-        m) 
-            if [ -n "$action" ]; then die "$err_act"; fi
-            action="menu" 
-            ;;
-        t) 
-            output="text" 
-            ;;
-        f) 
-            if [ "$output" != "text" ]; then die "$err_out"; fi
-            output="glyph" 
-            ;;
-        i) 
-            if [ "$output" != "text" ]; then die "$err_out"; fi
-            output="icon" 
-            ;;
-        \?|*) 
-            die "Invalid option. Use -h for help." 
-            ;;
-    esac
-done
-
 get_backend
 
-# --- Handle Actions ---
+# ---------------------------------------------------------
+# Handle Actions
+# ---------------------------------------------------------
 if [ -n "$action" ]; then
     case "$action" in
         gui)
@@ -256,22 +280,14 @@ if [ -n "$action" ]; then
     esac
 fi
 
-# --- Handle Continuous Output (Status Bar) ---
+# ---------------------------------------------------------
+# Handle Continuous Output (Status Bar)
+# ---------------------------------------------------------
 bri=$(get_bri)
 backend_err=$?
 
 if [ "$backend_err" -ne 0 ] || [ -z "$BACKEND" ]; then
-    case "$output" in
-        text)  
-            printf 'Bri: N/A\n' 
-            ;;
-        glyph) 
-            printf '󰃠 <span color="red">󱈸</span>\n' 
-            ;;
-        icon)  
-            printf '%s/bri-error.svg\n' "$iconpath" 
-            ;;
-    esac
+    print_fallback
     exit 0
 fi
 
