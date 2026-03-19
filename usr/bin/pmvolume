@@ -453,10 +453,6 @@ while getopts ":StfhiudxmMcs:" opt; do
     esac
 done
 
-if [ -z "$action" ]; then
-    action="poll"
-fi
-
 case $action in
     config|select_card|menu|open_mixer)
         ;;
@@ -509,7 +505,7 @@ case "$action" in
         send_notification
         broadcast_refresh
         ;;
-    poll)
+    "")
         case "$output" in
             text)
                 if [ "$state" = "off" ]; then
