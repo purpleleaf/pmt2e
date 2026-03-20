@@ -400,13 +400,15 @@ find_updates() {
 
 do_check() {
     l_output="$1"
-    
-    if [ "$l_output" = "text" ]; then 
-        printf "Checking...\n"
-    elif [ "$l_output" = "glyph" ]; then 
-        printf "󰂪\n"
-    elif [ "$l_output" = "icon" ]; then 
-        printf "/usr/share/pmt2e/icons/refresh.svg\n"
+
+    if [ "$(ps -p "$PPID" -o comm= 2>/dev/null | tr -d ' ')" = "tint2" ]; then
+        if [ "$l_output" = "text" ]; then 
+            printf "Checking...\n"
+        elif [ "$l_output" = "glyph" ]; then 
+            printf "󰂪\n"
+        elif [ "$l_output" = "icon" ]; then 
+            printf "/usr/share/pmt2e/icons/refresh.svg\n"
+        fi
     fi
 
     find_updates
